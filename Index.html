@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BUMDes — Sistem Keuangan Terpadu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+
+  <!-- ============================================================
+       HALAMAN LOGIN
+       ============================================================ -->
+  <div class="login-screen" id="loginScreen">
+    <div class="login-container">
+      <div class="login-card">
+        <div class="login-header">
+          <div class="login-logo-icon">
+            <i class="fas fa-landmark"></i>
+          </div>
+          <h1 class="login-title" id="loginBumdesName">BUMDes Maju Bersama</h1>
+          <p class="login-subtitle">Sistem Informasi Pengelolaan Keuangan &amp; Laporan Resmi</p>
+        </div>
+
+        <div class="login-alert danger" id="loginAlert">
+          <i class="fas fa-circle-exclamation"></i>
+          <span id="loginAlertText">Username atau kata sandi salah!</span>
+        </div>
+
+        <form id="formLogin" onsubmit="event.preventDefault(); handleLoginSubmit(event); return false;" action="javascript:void(0);" method="POST">
+          <div class="form-group-login">
+            <label for="loginUsername">Nama Pengguna (Username)</label>
+            <div class="input-icon-wrap">
+              <i class="fas fa-user prefix-icon"></i>
+              <input type="text" id="loginUsername" placeholder="Contoh: admin" required autocomplete="username" onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('loginPassword').focus();}">
+            </div>
+          </div>
+
+          <div class="form-group-login">
+            <label for="loginPassword">Kata Sandi (Password)</label>
+            <div class="input-icon-wrap">
+              <i class="fas fa-lock prefix-icon"></i>
+              <input type="password" id="loginPassword" placeholder="Masukkan kata sandi" required autocomplete="current-password" onkeydown="if(event.key==='Enter'){event.preventDefault();handleLoginSubmit(event);}">
+              <button type="button" class="btn-toggle-pass" onclick="togglePasswordVisibility('loginPassword', this)" title="Lihat/Sembunyikan password">
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="login-options">
+            <label class="remember-label">
+              <input type="checkbox" id="loginRemember" checked>
+              <span>Ingat saya di perangkat ini</span>
+            </label>
+            <a href="javascript:void(0)" onclick="alertDemoHelp()" style="color:var(--primary);text-decoration:none;font-weight:600">Bantuan Login</a>
+          </div>
+
+          <button type="button" class="btn-login-submit" id="btnLoginSubmit" onclick="handleLoginSubmit(event)">
+            <i class="fas fa-right-to-bracket"></i>
+            <span>Masuk ke Sistem</span>
+          </button>
+        </form>
+
+        <!-- Akun Demo Cepat (Klik untuk langsung mengisi) -->
+        <div class="demo-accounts">
+          <div class="demo-title">
+            <span>Akun Demo Cepat (Klik untuk Pilih):</span>
+            <i class="fas fa-key"></i>
+          </div>
+          <div class="demo-pills">
+            <button type="button" class="demo-pill" onclick="quickFillLogin('admin', 'admin123')">
+              <strong>Admin</strong>
+              <span>admin123</span>
+            </button>
+            <button type="button" class="demo-pill" onclick="quickFillLogin('bendahara', 'bendahara123')">
+              <strong>Bendahara</strong>
+              <span>bendahara123</span>
+            </button>
+            <button type="button" class="demo-pill" onclick="quickFillLogin('pengawas', 'pengawas123')">
+              <strong>Pengawas</strong>
+              <span>pengawas123</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="login-footer-text">
+          &copy; <span id="loginYear">2025</span> Aplikasi Keuangan BUMDes Terpadu.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       APLIKASI UTAMA (DASHBOARD & TRANSAKSI)
+       ============================================================ -->
+  <div id="app" style="display:none">
+
+    <!-- ===== SIDEBAR ===== -->
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo-wrap">
+          <div class="logo-icon"><i class="fas fa-landmark"></i></div>
+          <div class="logo-text">
+            <span class="logo-main" id="namaOrg">BUMDes</span>
+            <span class="logo-sub" id="namaDesa">Sistem Keuangan</span>
+          </div>
+        </div>
+        <button class="sidebar-close" onclick="toggleSidebar()"><i class="fas fa-times"></i></button>
+      </div>
+
+      <!-- Info Pengguna Aktif di Sidebar -->
+      <div class="user-profile-sidebar">
+        <div class="user-avatar" id="sidebarUserAvatar">A</div>
+        <div class="user-info-text">
+          <span class="user-info-name" id="sidebarUserName">Administrator</span>
+          <span class="user-role-badge" id="sidebarUserRole">Admin</span>
+        </div>
+      </div>
+
+      <!-- Scrollable Navigation -->
+      <div class="nav-scroll">
+        <div class="nav-group">
+          <div class="nav-label">UTAMA</div>
+          <a class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+            <i class="fas fa-chart-pie"></i><span>Dashboard</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-label">TRANSAKSI</div>
+          <a class="nav-item" data-page="modal" onclick="navigate('modal')">
+            <i class="fas fa-hand-holding-dollar"></i><span>Penyertaan Modal</span>
+          </a>
+          <a class="nav-item" data-page="pendapatan" onclick="navigate('pendapatan')">
+            <i class="fas fa-arrow-trend-up"></i><span>Pendapatan</span>
+          </a>
+          <a class="nav-item" data-page="biaya_variabel" onclick="navigate('biaya_variabel')">
+            <i class="fas fa-cart-shopping"></i><span>Biaya Variabel (HPP)</span>
+          </a>
+          <a class="nav-item" data-page="biaya_lainnya" onclick="navigate('biaya_lainnya')">
+            <i class="fas fa-receipt"></i><span>Biaya Operasional</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-label">PERENCANAAN</div>
+          <a class="nav-item" data-page="anggaran" onclick="navigate('anggaran')">
+            <i class="fas fa-clipboard-list"></i><span>RAB Anggaran</span>
+          </a>
+          <a class="nav-item" data-page="alokasi_pad" onclick="navigate('alokasi_pad')">
+            <i class="fas fa-arrows-split-up-and-left"></i><span>Alokasi PAD</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-label">LAPORAN RESMI</div>
+          <a class="nav-item" data-page="laba_rugi" onclick="navigate('laba_rugi')">
+            <i class="fas fa-scale-balanced"></i><span>Laba Rugi</span>
+          </a>
+          <a class="nav-item" data-page="arus_kas" onclick="navigate('arus_kas')">
+            <i class="fas fa-water"></i><span>Arus Kas</span>
+          </a>
+          <a class="nav-item" data-page="neraca" onclick="navigate('neraca')">
+            <i class="fas fa-table-columns"></i><span>Neraca Keuangan</span>
+          </a>
+          <a class="nav-item" data-page="kas" onclick="navigate('kas')">
+            <i class="fas fa-book-open"></i><span>Buku Kas Umum</span>
+          </a>
+        </div>
+
+        <div class="nav-group">
+          <div class="nav-label">MASTER DATA</div>
+          <a class="nav-item" data-page="unit_usaha" onclick="navigate('unit_usaha')">
+            <i class="fas fa-store"></i><span>Unit Usaha</span>
+          </a>
+          <a class="nav-item" data-page="pengguna" id="navPengguna" onclick="navigate('pengguna')">
+            <i class="fas fa-user-shield"></i><span>Kelola Pengguna</span>
+          </a>
+          <a class="nav-item" data-page="pengaturan" onclick="navigate('pengaturan')">
+            <i class="fas fa-gear"></i><span>Pengaturan</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="year-badge">Tahun Buku: <strong id="tahunAktif">2025</strong></div>
+        <button class="btn-logout-sidebar" onclick="confirmLogout()">
+          <i class="fas fa-arrow-right-from-bracket"></i>
+          <span>Keluar (Logout)</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- ===== MAIN CONTENT ===== -->
+    <div class="main-wrap">
+      <header class="topbar">
+        <button class="menu-btn" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
+        <div class="topbar-title" id="pageTitle">Dashboard</div>
+
+        <div class="topbar-right">
+          <!-- Filter Tahun Global -->
+          <div class="tahun-select-wrap">
+            <i class="fas fa-calendar-alt"></i>
+            <select id="globalTahun" onchange="onTahunChange(this.value)">
+              <option value="all">Semua Tahun</option>
+              <option value="2024">2024</option>
+              <option value="2025" selected>2025</option>
+              <option value="2026">2026</option>
+            </select>
+          </div>
+
+          <!-- Tombol Setup Database -->
+          <button class="btn-setup" onclick="runSetup()" title="Inisialisasi / Sinkronkan Database">
+            <i class="fas fa-database"></i>
+          </button>
+
+          <!-- User Menu -->
+          <div class="topbar-user">
+            <button class="btn btn-sm btn-ghost" onclick="openUbahPasswordModal()" title="Ubah Kata Sandi">
+              <i class="fas fa-key"></i>
+            </button>
+            <button class="btn btn-sm btn-danger" onclick="confirmLogout()" title="Keluar">
+              <i class="fas fa-power-off"></i>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main class="page-content" id="pageContent">
+        <div class="loading-state"><div class="spinner"></div><p>Memuat data...</p></div>
+      </main>
+    </div>
+  </div>
+
+  <!-- MODAL DIALOG -->
+  <div class="modal-overlay" id="modalOverlay" onclick="closeModal()"></div>
+  <div class="modal-box" id="modalBox">
+    <div class="modal-header">
+      <h3 id="modalTitle">Form</h3>
+      <button onclick="closeModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+
+  <!-- TOAST NOTIFIKASI -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <?!= include('Scripts'); ?>
+</body>
+</html>

@@ -1,0 +1,2443 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+// ============================================================
+// GLOBAL STATE & DATA
+// ============================================================
+let currentUser   = null;
+let currentPage   = 'dashboard';
+let currentTahun   = 2025;
+let pengaturan    = {};
+let unitList      = [];
+let charts        = {};
+
+let filterState = {
+  pendapatan:    { bulan: '', unit: '' },
+  biayaVariabel: { bulan: '', unit: '' },
+  biayaLainnya:  { bulan: '' },
+  labaRugi:      { bulan: '' }
+};
+
+// ============================================================
+// INISIALISASI & AUTENTIKASI
+// ============================================================
+window.addEventListener('load', () => {
+  const curY = new Date().getFullYear();
+  const yrEl = document.getElementById('loginYear');
+  if (yrEl) yrEl.textContent = curY;
+  checkAuth();
+});
+
+function checkAuth() {
+  try {
+    const saved = localStorage.getItem('bumdes_auth') || sessionStorage.getItem('bumdes_auth');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && (parsed.username || parsed.nama)) {
+        currentUser = parsed;
+        showApp();
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('Gagal mem-parse sesi auth:', e);
+  }
+  showLogin();
+}
+
+function showLogin() {
+  const loginScreen = document.getElementById('loginScreen');
+  const appEl = document.getElementById('app');
+  if (loginScreen) {
+    loginScreen.style.display = 'flex';
+    loginScreen.style.visibility = 'visible';
+  }
+  if (appEl) {
+    appEl.style.display = 'none';
+  }
+
+  // Ambil nama BUMDes dari database untuk judul kartu login jika terhubung
+  if (typeof google !== 'undefined' && google.script && google.script.run) {
+    google.script.run
+      .withSuccessHandler(d => {
+        if (d && d.nama_bumdes) {
+          const el = document.getElementById('loginBumdesName');
+          if (el) el.textContent = d.nama_bumdes;
+        }
+      })
+      .withFailureHandler(() => {})
+      .getPengaturan();
+  }
+}
+
+function showApp() {
+  try {
+    const loginScreen = document.getElementById('loginScreen');
+    const appEl = document.getElementById('app');
+
+    if (loginScreen) loginScreen.style.display = 'none';
+    if (appEl) {
+      appEl.style.display = 'flex';
+    }
+
+    // Update profil sidebar secara aman
+    if (currentUser) {
+      const uNameEl = document.getElementById('sidebarUserName');
+      const uRoleEl = document.getElementById('sidebarUserRole');
+      const uAvatarEl = document.getElementById('sidebarUserAvatar');
+      const navPengguna = document.getElementById('navPengguna');
+
+      const displayName = currentUser.nama || currentUser.username || 'Pengguna';
+      if (uNameEl) uNameEl.textContent = displayName;
+      if (uRoleEl) uRoleEl.textContent = currentUser.role || 'Staff';
+      if (uAvatarEl) uAvatarEl.textContent = displayName.charAt(0).toUpperCase();
+
+      if (navPengguna) {
+        navPengguna.style.display = (currentUser.role === 'Admin') ? 'flex' : 'none';
+      }
+    }
+
+    // LANGSUNG buka dashboard (jangan tunggu getPengaturan selesai agar tidak blank/macet)
+    navigate('dashboard');
+
+    // Muat pengaturan & unit di background secara paralel
+    loadPengaturanGlobal();
+  } catch (err) {
+    console.error('Error saat menampilkan aplikasi:', err);
+    const appEl = document.getElementById('app');
+    if (appEl) appEl.style.display = 'flex';
+    navigate('dashboard');
+  }
+}
+
+function handleLoginSubmit(e) {
+  if (e && e.preventDefault) e.preventDefault();
+
+  const unameEl = document.getElementById('loginUsername');
+  const passEl  = document.getElementById('loginPassword');
+  const rememberEl = document.getElementById('loginRemember');
+  const alertBox = document.getElementById('loginAlert');
+  const alertText = document.getElementById('loginAlertText');
+  const btnSubmit = document.getElementById('btnLoginSubmit');
+
+  const uname = unameEl ? unameEl.value.trim() : '';
+  const pass  = passEl  ? passEl.value.trim() : '';
+  const remember = rememberEl ? rememberEl.checked : true;
+
+  if (!uname || !pass) {
+    if (alertText) alertText.textContent = 'Harap masukkan nama pengguna dan kata sandi!';
+    if (alertBox) alertBox.className = 'login-alert danger show';
+    return false;
+  }
+
+  if (btnSubmit) {
+    btnSubmit.disabled = true;
+    btnSubmit.innerHTML = `<i class="fas fa-spinner fa-spin"></i><span>Memverifikasi...</span>`;
+  }
+  if (alertBox) alertBox.className = 'login-alert danger';
+
+  // Fallback jika preview di luar Google Apps Script
+  if (typeof google === 'undefined' || !google.script || !google.script.run) {
+    setTimeout(() => {
+      if (btnSubmit) {
+        btnSubmit.disabled = false;
+        btnSubmit.innerHTML = `<i class="fas fa-right-to-bracket"></i><span>Masuk ke Sistem</span>`;
+      }
+      currentUser = { username: uname, nama: uname.toUpperCase(), role: uname === 'admin' ? 'Admin' : 'Staff' };
+      showToast('Login berhasil!', 'success');
+      showApp();
+    }, 400);
+    return false;
+  }
+
+  google.script.run
+    .withSuccessHandler(res => {
+      if (btnSubmit) {
+        btnSubmit.disabled = false;
+        btnSubmit.innerHTML = `<i class="fas fa-right-to-bracket"></i><span>Masuk ke Sistem</span>`;
+      }
+
+      if (res && res.success) {
+        currentUser = res.user;
+        try {
+          if (remember) {
+            localStorage.setItem('bumdes_auth', JSON.stringify(currentUser));
+          } else {
+            sessionStorage.setItem('bumdes_auth', JSON.stringify(currentUser));
+          }
+        } catch (storageErr) {
+          console.warn('Gagal menyimpan sesi di browser:', storageErr);
+        }
+        showToast('Selamat datang, ' + (currentUser.nama || currentUser.username) + '!', 'success');
+        showApp();
+      } else {
+        if (alertText) alertText.textContent = (res && res.message) ? res.message : 'Username atau password salah!';
+        if (alertBox) alertBox.className = 'login-alert danger show';
+      }
+    })
+    .withFailureHandler(err => {
+      if (btnSubmit) {
+        btnSubmit.disabled = false;
+        btnSubmit.innerHTML = `<i class="fas fa-right-to-bracket"></i><span>Masuk ke Sistem</span>`;
+      }
+      if (alertText) alertText.textContent = 'Gagal terhubung ke Google Sheets: ' + (err.message || err);
+      if (alertBox) alertBox.className = 'login-alert danger show';
+    })
+    .loginUser(uname, pass);
+
+  return false;
+}
+
+function quickFillLogin(user, pass) {
+  const unameEl = document.getElementById('loginUsername');
+  const passEl  = document.getElementById('loginPassword');
+  const alertEl = document.getElementById('loginAlert');
+  if (unameEl) unameEl.value = user;
+  if (passEl) passEl.value = pass;
+  if (alertEl) alertEl.className = 'login-alert danger';
+  if (passEl) passEl.focus();
+}
+
+function togglePasswordVisibility(inputId, btn) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const isPass = input.type === 'password';
+  input.type = isPass ? 'text' : 'password';
+  const icon = btn.querySelector('i');
+  if (icon) {
+    icon.className = isPass ? 'fas fa-eye-slash' : 'fas fa-eye';
+  }
+}
+
+function alertDemoHelp() {
+  alert('Gunakan akun demo bawaan:\n• Admin: admin / admin123\n• Bendahara: bendahara / bendahara123\n• Pengawas: pengawas / pengawas123\n\nJika ini pertama kali dijalankan, klik tombol database di kanan atas setelah login untuk inisialisasi sheet.');
+}
+
+function confirmLogout() {
+  if (confirm('Apakah Anda yakin ingin keluar dari sistem?')) {
+    logout();
+  }
+}
+
+function logout() {
+  try {
+    localStorage.removeItem('bumdes_auth');
+    sessionStorage.removeItem('bumdes_auth');
+  } catch(e) {}
+  currentUser = null;
+  showToast('Anda telah keluar.', 'info');
+  showLogin();
+}
+
+// ============================================================
+// PENGATURAN GLOBAL & TAHUN AKTIF
+// ============================================================
+function loadPengaturanGlobal(callback) {
+  if (typeof google === 'undefined' || !google.script || !google.script.run) {
+    if (typeof callback === 'function') callback();
+    return;
+  }
+
+  google.script.run
+    .withSuccessHandler(d => {
+      try {
+        pengaturan = d || {};
+        const orgEl = document.getElementById('namaOrg');
+        const desaEl = document.getElementById('namaDesa');
+        if (orgEl) orgEl.textContent = d.nama_bumdes || 'BUMDes';
+        if (desaEl) desaEl.textContent = d.nama_desa || 'Sistem Keuangan';
+
+        // Sinkronkan pilihan tahun
+        if (d.tahun_aktif) {
+          const t = parseInt(d.tahun_aktif);
+          if (t && t !== currentTahun) {
+            currentTahun = t;
+            const tahunAktifEl = document.getElementById('tahunAktif');
+            if (tahunAktifEl) tahunAktifEl.textContent = currentTahun;
+            // Jika tahun aktif diperbarui dan pengguna sedang di dashboard, muat ulang dashboard
+            if (currentPage === 'dashboard') {
+              loadDashboard();
+            }
+          }
+        }
+
+        // Isi opsi tahun di select jika tersedia
+        const tahunSel = document.getElementById('globalTahun');
+        if (tahunSel) {
+          const years = (d.available_years && d.available_years.length > 0) ? d.available_years : [new Date().getFullYear()];
+          let optHtml = `<option value="all" ${currentTahun === 'all' ? 'selected' : ''}>Semua Tahun</option>`;
+          optHtml += years.map(y => `<option value="${y}" ${String(y) === String(currentTahun) ? 'selected' : ''}>${y}</option>`).join('');
+          tahunSel.innerHTML = optHtml;
+        }
+
+        const tahunAktifEl = document.getElementById('tahunAktif');
+        if (tahunAktifEl) tahunAktifEl.textContent = (currentTahun === 'all') ? 'Semua Tahun' : currentTahun;
+      } catch (err) {
+        console.warn('Gagal memproses pengaturan:', err);
+      }
+
+      if (typeof callback === 'function') callback();
+    })
+    .withFailureHandler(err => {
+      console.warn('Gagal memuat pengaturan:', err);
+      if (typeof callback === 'function') callback();
+    })
+    .getPengaturan();
+
+  google.script.run
+    .withSuccessHandler(d => { unitList = d || []; })
+    .withFailureHandler(err => { console.warn('Gagal memuat unit:', err); })
+    .getUnitUsaha();
+}
+
+function onTahunChange(val) {
+  currentTahun = (val === 'all' || val === 'semua' || !val) ? 'all' : (parseInt(val) || new Date().getFullYear());
+  const tahunAktifEl = document.getElementById('tahunAktif');
+  if (tahunAktifEl) tahunAktifEl.textContent = (currentTahun === 'all') ? 'Semua Tahun' : currentTahun;
+  const sel = document.getElementById('globalTahun');
+  if (sel) sel.value = currentTahun;
+  navigate(currentPage);
+}
+
+function runSetup() {
+  if (!confirm('Inisialisasi & sinkronkan database sekarang? Data transaksi yang ada tidak akan terhapus.')) return;
+  showToast('Menginisialisasi sheet...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      showToast(r.message || 'Setup database berhasil!', 'success');
+      loadPengaturanGlobal(() => navigate(currentPage));
+    })
+    .withFailureHandler(err => {
+      showToast('Gagal setup: ' + err.message, 'error');
+    })
+    .setupSpreadsheet();
+}
+
+// ============================================================
+// ROUTING & NAVIGASI
+// ============================================================
+const PAGE_TITLES = {
+  dashboard:     'Dashboard Keuangan',
+  modal:         'Penyertaan Modal',
+  pendapatan:    'Pendapatan Usaha',
+  biaya_variabel:'Biaya Variabel (HPP)',
+  biaya_lainnya: 'Biaya Operasional',
+  anggaran:      'RAB Anggaran',
+  alokasi_pad:   'Alokasi PAD',
+  laba_rugi:     'Laporan Laba Rugi',
+  arus_kas:      'Laporan Arus Kas',
+  neraca:        'Neraca Keuangan',
+  kas:           'Buku Kas Umum',
+  unit_usaha:    'Master Unit Usaha',
+  pengguna:      'Manajemen Pengguna',
+  pengaturan:    'Pengaturan Sistem'
+};
+
+function navigate(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.page === page));
+  document.getElementById('pageTitle').textContent = PAGE_TITLES[page] || page;
+
+  setContent('<div class="loading-state"><div class="spinner"></div><p>Memuat data...</p></div>');
+
+  Object.values(charts).forEach(c => { try { c.destroy(); } catch(e){} });
+  charts = {};
+
+  const routes = {
+    dashboard:      loadDashboard,
+    modal:          loadModal,
+    pendapatan:     loadPendapatan,
+    biaya_variabel: loadBiayaVariabel,
+    biaya_lainnya:  loadBiayaLainnya,
+    anggaran:       loadAnggaran,
+    alokasi_pad:    loadAlokasiPAD,
+    laba_rugi:      loadLabaRugi,
+    arus_kas:       loadArusKas,
+    neraca:         loadNeraca,
+    kas:            loadKas,
+    unit_usaha:     loadUnitUsaha,
+    pengguna:       loadPenggunaPage,
+    pengaturan:     loadPengaturanPage
+  };
+
+  (routes[page] || (() => setContent('<div class="empty-state"><i class="fas fa-question-circle"></i><p>Halaman tidak ditemukan</p></div>')))();
+
+  if (window.innerWidth < 900) closeSidebar();
+}
+
+function setContent(html) { document.getElementById('pageContent').innerHTML = html; }
+function toggleSidebar()  { document.getElementById('sidebar').classList.toggle('open'); }
+function closeSidebar()   { document.getElementById('sidebar').classList.remove('open'); }
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+function loadDashboard() {
+  google.script.run
+    .withSuccessHandler(res => {
+      const s = (res && res.summary) ? res.summary : {};
+      const pos = (s.labaBersih || 0) >= 0;
+
+      setContent(`
+        <div class="section-header">
+          <div>
+            <div class="section-title">Ringkasan Keuangan ${currentTahun === 'all' ? '(Semua Tahun)' : 'Tahun ' + currentTahun}</div>
+            <div class="section-sub">${pengaturan.nama_bumdes || 'BUMDes'} — Desa ${pengaturan.nama_desa || ''}</div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="navigate('pendapatan')"><i class="fas fa-plus"></i> Catat Transaksi</button>
+            <button class="btn btn-outline" onclick="navigate('laba_rugi')"><i class="fas fa-print"></i> Cetak Laporan</button>
+          </div>
+        </div>
+
+        ${(currentTahun !== 'all' && (s.totalTransaksi === 0) && (s.grandTotalTransaksi > 0)) ? `
+        <div style="background:var(--primary-subtle);border-left:4px solid var(--primary);padding:14px 18px;border-radius:10px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;box-shadow:var(--shadow)">
+          <div style="display:flex;align-items:center;gap:12px">
+            <i class="fas fa-info-circle" style="color:var(--primary);font-size:22px"></i>
+            <div>
+              <div style="font-weight:700;color:var(--primary-dark)">Data Ditemukan di Spreadsheet</div>
+              <div style="font-size:12.5px;color:var(--text)">Tidak ada transaksi untuk filter tahun ${currentTahun}, namun ditemukan <strong>${s.grandTotalTransaksi} transaksi</strong> di sheet pada tahun lain.</div>
+            </div>
+          </div>
+          <button class="btn btn-sm btn-primary" onclick="onTahunChange('all')"><i class="fas fa-calendar-check"></i> Tampilkan Semua Tahun (${s.grandTotalTransaksi} Data)</button>
+        </div>` : ''}
+
+        <div class="stats-grid">
+          <div class="stat-card green">
+            <div class="stat-label">Total Pendapatan</div>
+            <div class="stat-value rupiah text-green">${fRp(s.totalPendapatan)}</div>
+            <div class="stat-sub">${currentTahun === "all" ? "Seluruh Transaksi" : "Tahun Buku " + currentTahun}</div>
+            <i class="fas fa-arrow-trend-up stat-icon"></i>
+          </div>
+
+          <div class="stat-card red">
+            <div class="stat-label">Total Beban/Biaya</div>
+            <div class="stat-value rupiah text-red">${fRp(s.totalBiaya)}</div>
+            <div class="stat-sub">HPP + Operasional</div>
+            <i class="fas fa-arrow-trend-down stat-icon"></i>
+          </div>
+
+          <div class="stat-card ${pos ? 'blue' : 'red'}">
+            <div class="stat-label">Laba Bersih</div>
+            <div class="stat-value rupiah ${pos ? 'text-blue' : 'text-red'}">${fRp(s.labaBersih)}</div>
+            <div class="stat-sub">${pos ? 'Surplus Usaha' : 'Defisit Usaha'}</div>
+            <i class="fas fa-scale-balanced stat-icon"></i>
+          </div>
+
+          <div class="stat-card orange">
+            <div class="stat-label">Saldo Kas</div>
+            <div class="stat-value rupiah">${fRp(s.saldoKas)}</div>
+            <div class="stat-sub">Posisi Kas Berjalan</div>
+            <i class="fas fa-wallet stat-icon"></i>
+          </div>
+
+          <div class="stat-card teal">
+            <div class="stat-label">Total Modal</div>
+            <div class="stat-value rupiah">${fRp(s.totalModal)}</div>
+            <div class="stat-sub">Penyertaan Modal Desa</div>
+            <i class="fas fa-hand-holding-dollar stat-icon"></i>
+          </div>
+
+          <div class="stat-card purple">
+            <div class="stat-label">Unit Usaha</div>
+            <div class="stat-value">${s.unitAktif || 0} Unit</div>
+            <div class="stat-sub">${s.totalTransaksi || 0} Transaksi ${currentTahun}</div>
+            <i class="fas fa-store stat-icon"></i>
+          </div>
+        </div>
+
+        <div class="chart-grid">
+          <div class="card chart-wrap">
+            <div class="card-header">
+              <div class="card-title"><i class="fas fa-chart-column"></i> Tren Pendapatan &amp; Biaya (Bulanan)</div>
+            </div>
+            <canvas id="cTrend" height="210"></canvas>
+          </div>
+
+          <div class="card chart-wrap">
+            <div class="card-header">
+              <div class="card-title"><i class="fas fa-chart-pie"></i> Komposisi Biaya &amp; Laba</div>
+            </div>
+            <div id="pieWrap">
+              <canvas id="cPie" height="210"></canvas>
+            </div>
+          </div>
+        </div>`);
+
+      const trend = (res && res.trend) ? res.trend : [];
+      const labels = trend.map(t => BULAN_S[t.bulan]);
+
+      // Render Bar Chart
+      if (window.Chart) {
+        try {
+          const ctxTrend = document.getElementById('cTrend');
+          if (ctxTrend) {
+            charts.trend = new Chart(ctxTrend.getContext('2d'), {
+              type: 'bar',
+              data: {
+                labels,
+                datasets: [
+                  { label: 'Pendapatan', data: trend.map(t => t.pendapatan), backgroundColor: 'rgba(22,163,74,.8)', borderRadius: 5 },
+                  { label: 'Total Biaya', data: trend.map(t => t.biaya),      backgroundColor: 'rgba(220,38,38,.8)',  borderRadius: 5 },
+                  { label: 'Laba Bersih', data: trend.map(t => t.laba), type: 'line', borderColor: '#0f4c81',
+                    backgroundColor: 'rgba(15,76,129,.1)', tension: 0.35, fill: true, pointRadius: 4 }
+                ]
+              },
+              options: {
+                responsive: true,
+                plugins: { legend: { position: 'top' } },
+                scales: { y: { ticks: { callback: v => 'Rp ' + fK(v) } } }
+              }
+            });
+          }
+
+          // Render Doughnut Chart
+          const ctxPie = document.getElementById('cPie');
+          const bvVal = s.totalBiayaVariabel || 0;
+          const blVal = s.totalBiayaLainnya || 0;
+          const lbVal = Math.max(0, s.labaBersih || 0);
+
+          if (bvVal + blVal + lbVal === 0) {
+            document.getElementById('pieWrap').innerHTML = `
+              <div class="empty-state" style="padding:40px 10px">
+                <i class="fas fa-chart-pie"></i>
+                <p>Belum ada data pendapatan/biaya pada tahun ${currentTahun}</p>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:4px">Catat pendapatan atau pilih tahun buku lain di menu atas</div>
+              </div>`;
+          } else if (ctxPie) {
+            charts.pie = new Chart(ctxPie.getContext('2d'), {
+              type: 'doughnut',
+              data: {
+                labels: ['Biaya Variabel (HPP)', 'Biaya Operasional', 'Laba Bersih'],
+                datasets: [{
+                  data: [bvVal, blVal, lbVal],
+                  backgroundColor: ['#f59e0b', '#ef4444', '#16a34a'],
+                  borderWidth: 2,
+                  borderColor: '#fff'
+                }]
+              },
+              options: {
+                responsive: true,
+                plugins: { legend: { position: 'bottom' } },
+                cutout: '65%'
+              }
+            });
+          }
+        } catch (chartErr) {
+          console.warn('Gagal render chart:', chartErr);
+        }
+      }
+    })
+    .withFailureHandler(err => {
+      setContent(`
+        <div class="empty-state text-red">
+          <i class="fas fa-triangle-exclamation"></i>
+          <p>Gagal memuat data dashboard: ${err.message}</p>
+          <button class="btn btn-primary mt-4" onclick="loadDashboard()">Coba Muat Ulang</button>
+        </div>`);
+    })
+    .getDashboardData(currentTahun);
+}
+
+// ============================================================
+// PENYERTAAN MODAL
+// ============================================================
+function loadModal() {
+  google.script.run
+    .withSuccessHandler(rows => {
+      rows = rows || [];
+      const total = rows.reduce((s, r) => s + (parseNumber(r.Jumlah) || 0), 0);
+      let h = `
+        <div class="section-header">
+          <div>
+            <div class="section-title">Penyertaan Modal Desa</div>
+            <div class="section-sub">Total Modal Terhimpun: <strong>${fRp(total)}</strong></div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormModal()"><i class="fas fa-plus"></i> Tambah Modal</button>
+          </div>
+        </div>
+        <div class="card"><div class="table-wrap"><table>
+          <thead><tr><th>Tanggal</th><th>Sumber Modal</th><th>Keterangan</th><th>Jenis</th><th class="text-right">Jumlah</th><th>Status</th><th class="text-center">Aksi</th></tr></thead>
+          <tbody>`;
+
+      if (!rows.length) {
+        h += `<tr><td colspan="7"><div class="empty-state"><i class="fas fa-hand-holding-dollar"></i><p>Belum ada data modal penyertaan pada tahun ${currentTahun}</p></div></td></tr>`;
+      }
+
+      rows.forEach(r => {
+        h += `<tr>
+          <td>${fDate(r.Tanggal)}</td>
+          <td><strong>${r.Sumber_Modal || ''}</strong></td>
+          <td>${r.Keterangan || '-'}</td>
+          <td><span class="badge badge-info">${r.Jenis || 'Tunai'}</span></td>
+          <td class="text-right rupiah fw-bold text-blue">${fRp(r.Jumlah)}</td>
+          <td><span class="badge badge-success">${r.Status || 'Aktif'}</span></td>
+          <td class="text-center">
+            <button class="btn btn-sm btn-ghost btn-icon" title="Edit" onclick='openFormModal(${JSON.stringify(r)})'><i class="fas fa-edit"></i></button>
+            <button class="btn btn-sm btn-danger btn-icon" title="Hapus" onclick="hapusModal('${r.ID}')"><i class="fas fa-trash"></i></button>
+          </td></tr>`;
+      });
+
+      h += `</tbody><tfoot><tr class="tfoot-row"><td colspan="4"><strong>TOTAL MODAL</strong></td>
+        <td class="text-right rupiah">${fRp(total)}</td><td colspan="2"></td></tr></tfoot></table></div></div>`;
+      setContent(h);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat modal: ${err.message}</p></div>`);
+    })
+    .getModal({ tahun: currentTahun });
+}
+
+function openFormModal(d) {
+  d = d || {};
+  document.getElementById('modalTitle').textContent = d.ID ? 'Edit Modal' : 'Tambah Penyertaan Modal';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label req">Tanggal</label>
+        <input type="date" class="form-control" id="fmTgl" value="${d.Tanggal ? fDateInput(d.Tanggal) : today()}" required></div>
+      <div class="form-group"><label class="form-label req">Sumber Modal</label>
+        <select class="form-control" id="fmSumber">
+          ${['Pemerintah Desa', 'APBDes', 'Penyertaan Masyarakat', 'Swasta / Pihak Ketiga', 'Dana Desa', 'Hibah / Bantuan', 'Lainnya']
+            .map(v => `<option value="${v}" ${d.Sumber_Modal === v ? 'selected' : ''}>${v}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label req">Jumlah (Rp)</label>
+        <input type="number" class="form-control" id="fmJml" value="${d.Jumlah || ''}" placeholder="0" required></div>
+      <div class="form-group"><label class="form-label">Jenis Modal</label>
+        <select class="form-control" id="fmJenis">
+          <option value="Tunai" ${d.Jenis === 'Tunai' ? 'selected' : ''}>Tunai (Masuk Kas)</option>
+          <option value="Aset" ${d.Jenis === 'Aset' ? 'selected' : ''}>Aset / Barang Tetap</option>
+          <option value="Non Tunai" ${d.Jenis === 'Non Tunai' ? 'selected' : ''}>Non Tunai Lainnya</option>
+        </select></div>
+      <div class="form-group full"><label class="form-label">Keterangan / Rincian</label>
+        <textarea class="form-control" id="fmKet" placeholder="Catatan tambahan...">${d.Keterangan || ''}</textarea></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="saveModalForm('${d.ID || ''}')"><i class="fas fa-save"></i> Simpan Modal</button>
+    </div>`;
+  openModal();
+}
+
+function saveModalForm(id) {
+  const data = {
+    ID: id,
+    Tanggal: v('fmTgl'),
+    Sumber_Modal: v('fmSumber'),
+    Jumlah: v('fmJml'),
+    Jenis: v('fmJenis'),
+    Keterangan: v('fmKet')
+  };
+  if (!data.Tanggal || !data.Jumlah || parseFloat(data.Jumlah) <= 0) {
+    showToast('Tanggal dan jumlah modal harus diisi dengan benar!', 'error');
+    return;
+  }
+  showToast('Menyimpan modal...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Modal disimpan!', 'success'); closeModal(); loadModal(); }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .saveModal(data);
+}
+
+function hapusModal(id) {
+  if (!confirm('Yakin ingin menghapus data modal ini?')) return;
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Data modal dihapus', 'success'); loadModal(); }
+    })
+    .deleteModal(id);
+}
+
+// ============================================================
+// PENDAPATAN
+// ============================================================
+function loadPendapatan() {
+  const bulan = filterState.pendapatan.bulan;
+  const unit  = filterState.pendapatan.unit;
+
+  google.script.run
+    .withSuccessHandler(rows => {
+      rows = rows || [];
+      const total = rows.reduce((s, r) => s + (parseNumber(r.Jumlah) || 0), 0);
+      let h = `
+        <div class="section-header">
+          <div>
+            <div class="section-title">Pendapatan Usaha</div>
+            <div class="section-sub">Total Pendapatan: <strong class="text-green">${fRp(total)}</strong></div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormPend()"><i class="fas fa-plus"></i> Tambah Pendapatan</button>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <select id="fpBulan" onchange="onFilterPendapatanChange()">
+            <option value="" ${bulan === '' ? 'selected' : ''}>Semua Bulan</option>
+            ${Array.from({length:12}, (_, i) => `<option value="${i+1}" ${String(bulan) === String(i+1) ? 'selected' : ''}>${BULAN[i+1]}</option>`).join('')}
+          </select>
+          <select id="fpUnit" onchange="onFilterPendapatanChange()">
+            <option value="" ${unit === '' ? 'selected' : ''}>Semua Unit Usaha</option>
+            ${unitList.map(u => `<option value="${u.Nama_Unit}" ${unit === u.Nama_Unit ? 'selected' : ''}>${u.Nama_Unit}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="card"><div class="table-wrap"><table>
+          <thead><tr><th>Tanggal</th><th>Unit Usaha</th><th>Kategori</th><th>Keterangan</th><th>Metode</th><th class="text-right">Jumlah</th><th class="text-center">Aksi</th></tr></thead>
+          <tbody>`;
+
+      if (!rows.length) {
+        h += `<tr><td colspan="7"><div class="empty-state"><i class="fas fa-arrow-trend-up"></i><p>Belum ada data pendapatan pada filter ini (${currentTahun === "all" ? "Semua Tahun" : currentTahun})</p><button class="btn btn-outline btn-sm mt-2" onclick="onTahunChange('all')"><i class="fas fa-calendar-check"></i> Tampilkan Semua Tahun</button></div></td></tr>`;
+      }
+
+      rows.forEach(r => {
+        h += `<tr>
+          <td>${fDate(r.Tanggal)}</td>
+          <td><strong>${r.Unit_Usaha || 'Umum'}</strong></td>
+          <td><span class="badge badge-success">${r.Kategori || '-'}</span></td>
+          <td>${r.Keterangan || '-'}</td>
+          <td><span class="badge badge-neutral">${r.Metode_Bayar || 'Tunai'}</span></td>
+          <td class="text-right rupiah fw-bold text-green">${fRp(r.Jumlah)}</td>
+          <td class="text-center">
+            <button class="btn btn-sm btn-ghost btn-icon" title="Edit" onclick='openFormPend(${JSON.stringify(r)})'><i class="fas fa-edit"></i></button>
+            <button class="btn btn-sm btn-danger btn-icon" title="Hapus" onclick="hapusPend('${r.ID}')"><i class="fas fa-trash"></i></button>
+          </td></tr>`;
+      });
+
+      h += `</tbody><tfoot><tr class="tfoot-row"><td colspan="5"><strong>TOTAL PENDAPATAN</strong></td>
+        <td class="text-right rupiah text-green">${fRp(total)}</td><td></td></tr></tfoot></table></div></div>`;
+      setContent(h);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat pendapatan: ${err.message}</p></div>`);
+    })
+    .getPendapatan({
+      tahun: currentTahun,
+      bulan: bulan ? parseInt(bulan) : null,
+      unit: unit || null
+    });
+}
+
+function onFilterPendapatanChange() {
+  filterState.pendapatan.bulan = v('fpBulan');
+  filterState.pendapatan.unit  = v('fpUnit');
+  loadPendapatan();
+}
+
+function openFormPend(d) {
+  d = d || {};
+  document.getElementById('modalTitle').textContent = d.ID ? 'Edit Pendapatan' : 'Tambah Pendapatan';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label req">Tanggal</label>
+        <input type="date" class="form-control" id="ppTgl" value="${d.Tanggal ? fDateInput(d.Tanggal) : today()}" required></div>
+      <div class="form-group"><label class="form-label req">Unit Usaha</label>
+        <select class="form-control" id="ppUnit" required>
+          <option value="">-- Pilih Unit Usaha --</option>
+          ${unitList.map(u => `<option value="${u.Nama_Unit}" ${d.Unit_Usaha === u.Nama_Unit ? 'selected' : ''}>${u.Nama_Unit}</option>`).join('')}
+          <option value="Umum" ${d.Unit_Usaha === 'Umum' ? 'selected' : ''}>Umum / Lainnya</option>
+        </select></div>
+      <div class="form-group"><label class="form-label req">Kategori</label>
+        <select class="form-control" id="ppKat">
+          ${['Penjualan Produk', 'Jasa Layanan', 'Sewa Aset / Tempat', 'Bagi Hasil Usaha', 'Bunga / Investasi', 'Pendapatan Lain-lain']
+            .map(k => `<option value="${k}" ${d.Kategori === k ? 'selected' : ''}>${k}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label req">Jumlah (Rp)</label>
+        <input type="number" class="form-control" id="ppJml" value="${d.Jumlah || ''}" placeholder="0" required></div>
+      <div class="form-group"><label class="form-label">Metode Bayar</label>
+        <select class="form-control" id="ppMetode">
+          ${['Tunai', 'Transfer Bank', 'QRIS', 'Cek / Bilyet Giro']
+            .map(m => `<option value="${m}" ${d.Metode_Bayar === m ? 'selected' : ''}>${m}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">No. Bukti / Nota</label>
+        <input type="text" class="form-control" id="ppBukti" value="${d.Bukti || ''}" placeholder="No. Nota"></div>
+      <div class="form-group full"><label class="form-label">Keterangan Transaksi</label>
+        <textarea class="form-control" id="ppKet" placeholder="Keterangan pendapatan...">${d.Keterangan || ''}</textarea></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="savePend('${d.ID || ''}')"><i class="fas fa-save"></i> Simpan</button>
+    </div>`;
+  openModal();
+}
+
+function savePend(id) {
+  const data = {
+    ID: id,
+    Tanggal: v('ppTgl'),
+    Unit_Usaha: v('ppUnit'),
+    Kategori: v('ppKat'),
+    Jumlah: v('ppJml'),
+    Metode_Bayar: v('ppMetode'),
+    Bukti: v('ppBukti'),
+    Keterangan: v('ppKet')
+  };
+  if (!data.Tanggal || !data.Unit_Usaha || !data.Jumlah || parseFloat(data.Jumlah) <= 0) {
+    showToast('Harap isi tanggal, unit usaha, dan jumlah pendapatan!', 'error');
+    return;
+  }
+  showToast('Menyimpan...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Pendapatan disimpan!', 'success'); closeModal(); loadPendapatan(); }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .savePendapatan(data);
+}
+
+function hapusPend(id) {
+  if (!confirm('Hapus pendapatan ini? Saldo kas akan disinkronkan otomatis.')) return;
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Pendapatan dihapus', 'success'); loadPendapatan(); }
+    })
+    .deletePendapatan(id);
+}
+
+// ============================================================
+// BIAYA VARIABEL (HPP)
+// ============================================================
+function loadBiayaVariabel() {
+  const bulan = filterState.biayaVariabel.bulan;
+  const unit  = filterState.biayaVariabel.unit;
+
+  google.script.run
+    .withSuccessHandler(rows => {
+      rows = rows || [];
+      const total = rows.reduce((s, r) => s + (parseNumber(r.Jumlah) || 0), 0);
+      let h = `
+        <div class="section-header">
+          <div>
+            <div class="section-title">Biaya Variabel (HPP)</div>
+            <div class="section-sub">Total Biaya Variabel: <strong class="text-red">${fRp(total)}</strong></div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormBV()"><i class="fas fa-plus"></i> Tambah Biaya</button>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <select id="fbvBulan" onchange="onFilterBVChange()">
+            <option value="" ${bulan === '' ? 'selected' : ''}>Semua Bulan</option>
+            ${Array.from({length:12}, (_, i) => `<option value="${i+1}" ${String(bulan) === String(i+1) ? 'selected' : ''}>${BULAN[i+1]}</option>`).join('')}
+          </select>
+          <select id="fbvUnit" onchange="onFilterBVChange()">
+            <option value="" ${unit === '' ? 'selected' : ''}>Semua Unit Usaha</option>
+            ${unitList.map(u => `<option value="${u.Nama_Unit}" ${unit === u.Nama_Unit ? 'selected' : ''}>${u.Nama_Unit}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="card"><div class="table-wrap"><table>
+          <thead><tr><th>Tanggal</th><th>Unit Usaha</th><th>Kategori</th><th>Keterangan</th><th>Vendor/Pemasok</th><th class="text-right">Jumlah</th><th class="text-center">Aksi</th></tr></thead>
+          <tbody>`;
+
+      if (!rows.length) {
+        h += `<tr><td colspan="7"><div class="empty-state"><i class="fas fa-cart-shopping"></i><p>Belum ada biaya variabel pada filter ini</p></div></td></tr>`;
+      }
+
+      rows.forEach(r => {
+        h += `<tr>
+          <td>${fDate(r.Tanggal)}</td>
+          <td><strong>${r.Unit_Usaha || 'Umum'}</strong></td>
+          <td><span class="badge badge-warning">${r.Kategori || '-'}</span></td>
+          <td>${r.Keterangan || '-'}</td>
+          <td>${r.Vendor || '-'}</td>
+          <td class="text-right rupiah fw-bold text-red">${fRp(r.Jumlah)}</td>
+          <td class="text-center">
+            <button class="btn btn-sm btn-ghost btn-icon" title="Edit" onclick='openFormBV(${JSON.stringify(r)})'><i class="fas fa-edit"></i></button>
+            <button class="btn btn-sm btn-danger btn-icon" title="Hapus" onclick="hapusBV('${r.ID}')"><i class="fas fa-trash"></i></button>
+          </td></tr>`;
+      });
+
+      h += `</tbody><tfoot><tr class="tfoot-row"><td colspan="5"><strong>TOTAL BIAYA VARIABEL</strong></td>
+        <td class="text-right rupiah text-red">${fRp(total)}</td><td></td></tr></tfoot></table></div></div>`;
+      setContent(h);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat biaya: ${err.message}</p></div>`);
+    })
+    .getBiayaVariabel({
+      tahun: currentTahun,
+      bulan: bulan ? parseInt(bulan) : null,
+      unit: unit || null
+    });
+}
+
+function onFilterBVChange() {
+  filterState.biayaVariabel.bulan = v('fbvBulan');
+  filterState.biayaVariabel.unit  = v('fbvUnit');
+  loadBiayaVariabel();
+}
+
+function openFormBV(d) {
+  d = d || {};
+  document.getElementById('modalTitle').textContent = d.ID ? 'Edit Biaya Variabel' : 'Tambah Biaya Variabel';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label req">Tanggal</label>
+        <input type="date" class="form-control" id="bvTgl" value="${d.Tanggal ? fDateInput(d.Tanggal) : today()}" required></div>
+      <div class="form-group"><label class="form-label req">Unit Usaha</label>
+        <select class="form-control" id="bvUnit" required>
+          <option value="">-- Pilih Unit Usaha --</option>
+          ${unitList.map(u => `<option value="${u.Nama_Unit}" ${d.Unit_Usaha === u.Nama_Unit ? 'selected' : ''}>${u.Nama_Unit}</option>`).join('')}
+          <option value="Umum" ${d.Unit_Usaha === 'Umum' ? 'selected' : ''}>Umum</option>
+        </select></div>
+      <div class="form-group"><label class="form-label req">Kategori Biaya</label>
+        <select class="form-control" id="bvKat">
+          ${['Pembelian Bahan Baku', 'Upah Tenaga Kerja Langsung', 'Biaya Produksi / Olah', 'Biaya Pengemasan', 'Biaya Distribusi / Transport', 'Komisi Penjualan', 'Lainnya']
+            .map(k => `<option value="${k}" ${d.Kategori === k ? 'selected' : ''}>${k}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label req">Jumlah (Rp)</label>
+        <input type="number" class="form-control" id="bvJml" value="${d.Jumlah || ''}" placeholder="0" required></div>
+      <div class="form-group"><label class="form-label">Vendor / Pemasok</label>
+        <input type="text" class="form-control" id="bvVendor" value="${d.Vendor || ''}" placeholder="Nama toko / vendor"></div>
+      <div class="form-group"><label class="form-label">No. Bukti</label>
+        <input type="text" class="form-control" id="bvBukti" value="${d.Bukti || ''}" placeholder="No. Nota"></div>
+      <div class="form-group full"><label class="form-label">Keterangan</label>
+        <textarea class="form-control" id="bvKet">${d.Keterangan || ''}</textarea></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="saveBV('${d.ID || ''}')"><i class="fas fa-save"></i> Simpan</button>
+    </div>`;
+  openModal();
+}
+
+function saveBV(id) {
+  const data = {
+    ID: id,
+    Tanggal: v('bvTgl'),
+    Unit_Usaha: v('bvUnit'),
+    Kategori: v('bvKat'),
+    Jumlah: v('bvJml'),
+    Vendor: v('bvVendor'),
+    Bukti: v('bvBukti'),
+    Keterangan: v('bvKet')
+  };
+  if (!data.Tanggal || !data.Jumlah || parseFloat(data.Jumlah) <= 0) {
+    showToast('Tanggal dan jumlah biaya harus diisi!', 'error');
+    return;
+  }
+  showToast('Menyimpan...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Biaya tersimpan!', 'success'); closeModal(); loadBiayaVariabel(); }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .saveBiayaVariabel(data);
+}
+
+function hapusBV(id) {
+  if (!confirm('Hapus biaya variabel ini?')) return;
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Biaya dihapus', 'success'); loadBiayaVariabel(); }
+    })
+    .deleteBiayaVariabel(id);
+}
+
+// ============================================================
+// BIAYA LAINNYA (OPERASIONAL)
+// ============================================================
+function loadBiayaLainnya() {
+  const bulan = filterState.biayaLainnya.bulan;
+
+  google.script.run
+    .withSuccessHandler(rows => {
+      rows = rows || [];
+      const total = rows.reduce((s, r) => s + (parseNumber(r.Jumlah) || 0), 0);
+      let h = `
+        <div class="section-header">
+          <div>
+            <div class="section-title">Biaya Operasional &amp; Lainnya</div>
+            <div class="section-sub">Total Biaya Operasional: <strong class="text-red">${fRp(total)}</strong></div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormBL()"><i class="fas fa-plus"></i> Tambah Biaya</button>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <select id="fblBulan" onchange="onFilterBLChange()">
+            <option value="" ${bulan === '' ? 'selected' : ''}>Semua Bulan</option>
+            ${Array.from({length:12}, (_, i) => `<option value="${i+1}" ${String(bulan) === String(i+1) ? 'selected' : ''}>${BULAN[i+1]}</option>`).join('')}
+          </select>
+        </div>
+
+        <div class="card"><div class="table-wrap"><table>
+          <thead><tr><th>Tanggal</th><th>Kategori</th><th>Keterangan</th><th>Penerima</th><th class="text-right">Jumlah</th><th class="text-center">Aksi</th></tr></thead>
+          <tbody>`;
+
+      if (!rows.length) {
+        h += `<tr><td colspan="6"><div class="empty-state"><i class="fas fa-receipt"></i><p>Belum ada biaya operasional pada filter ini</p></div></td></tr>`;
+      }
+
+      rows.forEach(r => {
+        h += `<tr>
+          <td>${fDate(r.Tanggal)}</td>
+          <td><span class="badge badge-neutral">${r.Kategori || '-'}</span></td>
+          <td>${r.Keterangan || '-'}</td>
+          <td>${r.Penerima || '-'}</td>
+          <td class="text-right rupiah fw-bold text-red">${fRp(r.Jumlah)}</td>
+          <td class="text-center">
+            <button class="btn btn-sm btn-ghost btn-icon" title="Edit" onclick='openFormBL(${JSON.stringify(r)})'><i class="fas fa-edit"></i></button>
+            <button class="btn btn-sm btn-danger btn-icon" title="Hapus" onclick="hapusBL('${r.ID}')"><i class="fas fa-trash"></i></button>
+          </td></tr>`;
+      });
+
+      h += `</tbody><tfoot><tr class="tfoot-row"><td colspan="4"><strong>TOTAL BIAYA OPERASIONAL</strong></td>
+        <td class="text-right rupiah text-red">${fRp(total)}</td><td></td></tr></tfoot></table></div></div>`;
+      setContent(h);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat biaya: ${err.message}</p></div>`);
+    })
+    .getBiayaLainnya({
+      tahun: currentTahun,
+      bulan: bulan ? parseInt(bulan) : null
+    });
+}
+
+function onFilterBLChange() {
+  filterState.biayaLainnya.bulan = v('fblBulan');
+  loadBiayaLainnya();
+}
+
+function openFormBL(d) {
+  d = d || {};
+  document.getElementById('modalTitle').textContent = d.ID ? 'Edit Biaya Operasional' : 'Tambah Biaya Operasional';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label req">Tanggal</label>
+        <input type="date" class="form-control" id="blTgl" value="${d.Tanggal ? fDateInput(d.Tanggal) : today()}" required></div>
+      <div class="form-group"><label class="form-label req">Kategori Biaya</label>
+        <select class="form-control" id="blKat">
+          ${['Gaji & Honor Pengurus', 'Sewa Gedung / Fasilitas', 'Listrik, Air & Internet', 'ATK & Administrasi', 'Pemeliharaan Aset & Fasilitas', 'Biaya Rapat & Musdes', 'Perjalanan Dinas', 'Sosial & Bantuan Warga', 'Pajak & Retribusi', 'Lain-lain']
+            .map(k => `<option value="${k}" ${d.Kategori === k ? 'selected' : ''}>${k}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label req">Jumlah (Rp)</label>
+        <input type="number" class="form-control" id="blJml" value="${d.Jumlah || ''}" placeholder="0" required></div>
+      <div class="form-group"><label class="form-label">Nama Penerima</label>
+        <input type="text" class="form-control" id="blPenerima" value="${d.Penerima || ''}" placeholder="Penerima dana"></div>
+      <div class="form-group"><label class="form-label">No. Bukti</label>
+        <input type="text" class="form-control" id="blBukti" value="${d.Bukti || ''}" placeholder="No. Kuitansi"></div>
+      <div class="form-group full"><label class="form-label">Keterangan</label>
+        <textarea class="form-control" id="blKet">${d.Keterangan || ''}</textarea></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="saveBL('${d.ID || ''}')"><i class="fas fa-save"></i> Simpan</button>
+    </div>`;
+  openModal();
+}
+
+function saveBL(id) {
+  const data = {
+    ID: id,
+    Tanggal: v('blTgl'),
+    Kategori: v('blKat'),
+    Jumlah: v('blJml'),
+    Penerima: v('blPenerima'),
+    Bukti: v('blBukti'),
+    Keterangan: v('blKet')
+  };
+  if (!data.Tanggal || !data.Jumlah || parseFloat(data.Jumlah) <= 0) {
+    showToast('Harap isi tanggal dan jumlah biaya operasional!', 'error');
+    return;
+  }
+  showToast('Menyimpan...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Biaya operasional disimpan!', 'success'); closeModal(); loadBiayaLainnya(); }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .saveBiayaLainnya(data);
+}
+
+function hapusBL(id) {
+  if (!confirm('Hapus biaya operasional ini?')) return;
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Biaya dihapus', 'success'); loadBiayaLainnya(); }
+    })
+    .deleteBiayaLainnya(id);
+}
+
+// ============================================================
+// ANGGARAN (RAB)
+// ============================================================
+function loadAnggaran() {
+  google.script.run
+    .withSuccessHandler(rows => {
+      rows = rows || [];
+      const tA = rows.reduce((s, r) => s + (parseNumber(r.Anggaran) || 0), 0);
+      const tR = rows.reduce((s, r) => s + (parseNumber(r.Realisasi) || 0), 0);
+      const pct = tA > 0 ? Math.round((tR / tA) * 100) : 0;
+
+      let h = `
+        <div class="section-header">
+          <div>
+            <div class="section-title">Rencana Anggaran Biaya (RAB) ${currentTahun}</div>
+            <div class="section-sub">Pagu Anggaran vs Realisasi Berjalan</div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormAng()"><i class="fas fa-plus"></i> Tambah Anggaran</button>
+          </div>
+        </div>
+
+        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:18px">
+          <div class="stat-card blue"><div class="stat-label">Pagu Anggaran</div><div class="stat-value rupiah">${fRp(tA)}</div></div>
+          <div class="stat-card green"><div class="stat-label">Total Realisasi</div><div class="stat-value rupiah">${fRp(tR)}</div></div>
+          <div class="stat-card ${pct > 100 ? 'red' : 'orange'}"><div class="stat-label">Tingkat Penyerapan</div><div class="stat-value">${pct}%</div></div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-body">
+            <div class="progress-wrap">
+              <div class="progress-label">
+                <span>Penyerapan Anggaran Tahun ${currentTahun}</span>
+                <strong>${pct}%</strong>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" style="width:${Math.min(pct, 100)}%;background:${pct > 100 ? 'var(--danger)' : pct > 75 ? 'var(--success)' : 'var(--primary)'}"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card"><div class="table-wrap"><table>
+          <thead><tr><th>Unit</th><th>Bulan</th><th>Kategori</th><th>Uraian</th><th class="text-right">Pagu</th><th class="text-right">Realisasi</th><th class="text-right">Sisa Pagu</th><th class="text-center">Aksi</th></tr></thead>
+          <tbody>`;
+
+      if (!rows.length) {
+        h += `<tr><td colspan="8"><div class="empty-state"><i class="fas fa-clipboard-list"></i><p>Belum ada anggaran pada tahun ${currentTahun}</p></div></td></tr>`;
+      }
+
+      rows.forEach(r => {
+        const sisa = (parseNumber(r.Anggaran) || 0) - (parseNumber(r.Realisasi) || 0);
+        h += `<tr>
+          <td><strong>${r.Unit_Usaha || 'Umum'}</strong></td>
+          <td>${BULAN[parseInt(r.Bulan)] || r.Bulan}</td>
+          <td><span class="badge badge-info">${r.Kategori || '-'}</span></td>
+          <td>${r.Uraian || '-'}</td>
+          <td class="text-right rupiah">${fRp(r.Anggaran)}</td>
+          <td class="text-right rupiah">${fRp(r.Realisasi)}</td>
+          <td class="text-right rupiah ${sisa < 0 ? 'text-red' : 'text-green'}"><strong>${fRp(sisa)}</strong></td>
+          <td class="text-center">
+            <button class="btn btn-sm btn-ghost btn-icon" title="Edit" onclick='openFormAng(${JSON.stringify(r)})'><i class="fas fa-edit"></i></button>
+            <button class="btn btn-sm btn-danger btn-icon" title="Hapus" onclick="hapusAng('${r.ID}')"><i class="fas fa-trash"></i></button>
+          </td></tr>`;
+      });
+
+      h += `</tbody></table></div></div>`;
+      setContent(h);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat anggaran: ${err.message}</p></div>`);
+    })
+    .getAnggaran({ tahun: currentTahun });
+}
+
+function openFormAng(d) {
+  d = d || {};
+  document.getElementById('modalTitle').textContent = d.ID ? 'Edit Anggaran' : 'Tambah Anggaran';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label req">Tahun</label>
+        <input type="number" class="form-control" id="angTahun" value="${d.Tahun || currentTahun}" required></div>
+      <div class="form-group"><label class="form-label req">Bulan</label>
+        <select class="form-control" id="angBulan">
+          ${Array.from({length:12}, (_, i) => `<option value="${i+1}" ${d.Bulan == i+1 ? 'selected' : ''}>${BULAN[i+1]}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Unit Usaha</label>
+        <select class="form-control" id="angUnit">
+          <option value="Umum">Umum / Semua Unit</option>
+          ${unitList.map(u => `<option value="${u.Nama_Unit}" ${d.Unit_Usaha === u.Nama_Unit ? 'selected' : ''}>${u.Nama_Unit}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label req">Kategori</label>
+        <select class="form-control" id="angKat">
+          ${['Target Pendapatan', 'Belanja Operasional', 'Belanja Modal / Aset', 'Pengembangan Usaha', 'Honor & SDM', 'Sosial & Binaan']
+            .map(k => `<option value="${k}" ${d.Kategori === k ? 'selected' : ''}>${k}</option>`).join('')}
+        </select></div>
+      <div class="form-group full"><label class="form-label req">Uraian Rencana</label>
+        <input type="text" class="form-control" id="angUraian" value="${d.Uraian || ''}" placeholder="Nama kegiatan / belanja" required></div>
+      <div class="form-group"><label class="form-label req">Pagu Anggaran (Rp)</label>
+        <input type="number" class="form-control" id="angJml" value="${d.Anggaran || ''}" placeholder="0" required></div>
+      <div class="form-group"><label class="form-label">Realisasi (Rp)</label>
+        <input type="number" class="form-control" id="angReal" value="${d.Realisasi || 0}" placeholder="0"></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="saveAng('${d.ID || ''}')"><i class="fas fa-save"></i> Simpan</button>
+    </div>`;
+  openModal();
+}
+
+function saveAng(id) {
+  const data = {
+    ID: id,
+    Tahun: v('angTahun'),
+    Bulan: v('angBulan'),
+    Unit_Usaha: v('angUnit'),
+    Kategori: v('angKat'),
+    Uraian: v('angUraian'),
+    Anggaran: v('angJml'),
+    Realisasi: v('angReal')
+  };
+  if (!data.Uraian || !data.Anggaran) {
+    showToast('Harap isi uraian dan pagu anggaran!', 'error');
+    return;
+  }
+  showToast('Menyimpan...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Anggaran disimpan!', 'success'); closeModal(); loadAnggaran(); }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .saveAnggaran(data);
+}
+
+function hapusAng(id) {
+  if (!confirm('Hapus anggaran ini?')) return;
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Anggaran dihapus', 'success'); loadAnggaran(); }
+    })
+    .deleteAnggaran(id);
+}
+
+// ============================================================
+// ALOKASI PAD
+// ============================================================
+function loadAlokasiPAD() {
+  google.script.run
+    .withSuccessHandler(lr => {
+      const laba    = (lr && lr.labaBersih) ? lr.labaBersih : 0;
+      const padPct  = parseInt(pengaturan.pad_desa_pct || 40);
+      const pengPct = parseInt(pengaturan.pengembangan_pct || 30);
+      const pgPct   = parseInt(pengaturan.pengurus_pct || 20);
+      const cadPct  = parseInt(pengaturan.cadangan_pct || 5);
+      const sosPct  = parseInt(pengaturan.sosial_pct || 5);
+
+      setContent(`
+        <div class="section-header">
+          <div>
+            <div class="section-title">Alokasi PAD &amp; Pembagian Hasil Usaha ${currentTahun}</div>
+            <div class="section-sub">Laba Bersih Tahun Berjalan: <strong class="${laba >= 0 ? 'text-green' : 'text-red'}">${fRp(laba)}</strong></div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormPAD(${laba})" ${laba <= 0 ? 'disabled' : ''}>
+              <i class="fas fa-arrows-split-up-and-left"></i> Realisasikan Alokasi PAD
+            </button>
+          </div>
+        </div>
+
+        <div class="card mb-4">
+          <div class="card-header"><div class="card-title"><i class="fas fa-calculator"></i> Simulasi Pembagian Laba Berdasarkan Perdes</div></div>
+          <div class="card-body">
+            <div class="alokasi-grid">
+              <div class="alokasi-card pad-desa">
+                <div class="alokasi-label">PAD Desa</div>
+                <div class="alokasi-pct">${padPct}%</div>
+                <div class="alokasi-nominal">${fRp((laba * padPct) / 100)}</div>
+              </div>
+              <div class="alokasi-card pengembangan">
+                <div class="alokasi-label">Pengembangan Usaha</div>
+                <div class="alokasi-pct">${pengPct}%</div>
+                <div class="alokasi-nominal">${fRp((laba * pengPct) / 100)}</div>
+              </div>
+              <div class="alokasi-card pengurus">
+                <div class="alokasi-label">Insentif Pengurus</div>
+                <div class="alokasi-pct">${pgPct}%</div>
+                <div class="alokasi-nominal">${fRp((laba * pgPct) / 100)}</div>
+              </div>
+              <div class="alokasi-card cadangan">
+                <div class="alokasi-label">Dana Cadangan</div>
+                <div class="alokasi-pct">${cadPct}%</div>
+                <div class="alokasi-nominal">${fRp((laba * cadPct) / 100)}</div>
+              </div>
+              <div class="alokasi-card sosial">
+                <div class="alokasi-label">Dana Sosial Desa</div>
+                <div class="alokasi-pct">${sosPct}%</div>
+                <div class="alokasi-nominal">${fRp((laba * sosPct) / 100)}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="histPAD"><div class="loading-state"><div class="spinner"></div></div></div>`);
+
+      google.script.run
+        .withSuccessHandler(rows => {
+          rows = rows || [];
+          let h = `<div class="card"><div class="card-header"><div class="card-title"><i class="fas fa-clock-rotate-left"></i> Riwayat Penyaluran Alokasi PAD</div></div>
+            <div class="table-wrap"><table>
+            <thead><tr><th>Tgl Alokasi</th><th>Periode</th><th class="text-right">Total Laba</th><th class="text-right">PAD Desa</th><th class="text-right">Pengembangan</th><th class="text-right">Pengurus</th><th class="text-right">Cadangan</th><th class="text-right">Sosial</th></tr></thead>
+            <tbody>`;
+
+          if (!rows.length) {
+            h += `<tr><td colspan="8"><div class="empty-state"><i class="fas fa-arrows-split-up-and-left"></i><p>Belum ada penyaluran alokasi PAD yang dicatat</p></div></td></tr>`;
+          }
+
+          rows.forEach(r => {
+            h += `<tr>
+              <td>${fDate(r.Tanggal_Alokasi)}</td>
+              <td>${BULAN[parseInt(r.Bulan)] || r.Bulan} ${r.Tahun}</td>
+              <td class="text-right rupiah fw-bold">${fRp(r.Total_Laba)}</td>
+              <td class="text-right rupiah text-blue">${fRp(r.PAD_Desa_Nominal)}</td>
+              <td class="text-right rupiah">${fRp(r.Pengembangan_Nominal)}</td>
+              <td class="text-right rupiah">${fRp(r.Pengurus_Nominal)}</td>
+              <td class="text-right rupiah">${fRp(r.Cadangan_Nominal)}</td>
+              <td class="text-right rupiah">${fRp(r.Sosial_Nominal)}</td>
+            </tr>`;
+          });
+
+          h += `</tbody></table></div></div>`;
+          document.getElementById('histPAD').innerHTML = h;
+        })
+        .getAlokasiPAD({ tahun: currentTahun });
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat PAD: ${err.message}</p></div>`);
+    })
+    .getLaporanLabaRugi(currentTahun, null);
+}
+
+function openFormPAD(laba) {
+  const p = pengaturan;
+  document.getElementById('modalTitle').textContent = 'Pencatatan Alokasi PAD';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">Tahun Buku</label>
+        <input type="number" class="form-control" id="alTahun" value="${currentTahun}"></div>
+      <div class="form-group"><label class="form-label">Bulan Alokasi</label>
+        <select class="form-control" id="alBulan">
+          ${Array.from({length:12}, (_, i) => `<option value="${i+1}">${BULAN[i+1]}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Tanggal Penyaluran</label>
+        <input type="date" class="form-control" id="alTgl" value="${today()}"></div>
+      <div class="form-group"><label class="form-label">Total Laba Bersih (Rp)</label>
+        <input type="number" class="form-control" id="alLaba" value="${laba}" readonly></div>
+    </div>
+    <hr class="divider">
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label">PAD Desa (%)</label>
+        <input type="number" class="form-control" id="alPAD" value="${p.pad_desa_pct || 40}" oninput="updatePADTotal()"></div>
+      <div class="form-group"><label class="form-label">Pengembangan Usaha (%)</label>
+        <input type="number" class="form-control" id="alPeng" value="${p.pengembangan_pct || 30}" oninput="updatePADTotal()"></div>
+      <div class="form-group"><label class="form-label">Pengurus BUMDes (%)</label>
+        <input type="number" class="form-control" id="alPgrs" value="${p.pengurus_pct || 20}" oninput="updatePADTotal()"></div>
+      <div class="form-group"><label class="form-label">Dana Cadangan (%)</label>
+        <input type="number" class="form-control" id="alCad" value="${p.cadangan_pct || 5}" oninput="updatePADTotal()"></div>
+      <div class="form-group"><label class="form-label">Dana Sosial (%)</label>
+        <input type="number" class="form-control" id="alSos" value="${p.sosial_pct || 5}" oninput="updatePADTotal()"></div>
+      <div class="form-group"><label class="form-label">Total Persentase (%)</label>
+        <input type="number" class="form-control" id="alTotal" value="100" readonly></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="savePAD()"><i class="fas fa-save"></i> Simpan Penyaluran</button>
+    </div>`;
+  openModal();
+}
+
+function updatePADTotal() {
+  const t = ['alPAD', 'alPeng', 'alPgrs', 'alCad', 'alSos'].reduce((s, id) => s + (parseFloat(document.getElementById(id).value) || 0), 0);
+  const el = document.getElementById('alTotal');
+  el.value = t;
+  el.style.color = (t === 100) ? 'var(--success)' : 'var(--danger)';
+}
+
+function savePAD() {
+  const t = ['alPAD', 'alPeng', 'alPgrs', 'alCad', 'alSos'].reduce((s, id) => s + (parseFloat(document.getElementById(id).value) || 0), 0);
+  if (t !== 100) { showToast('Total persentase harus 100%!', 'error'); return; }
+
+  const data = {
+    Tahun: v('alTahun'),
+    Bulan: v('alBulan'),
+    Total_Laba: v('alLaba'),
+    PAD_Desa_Pct: v('alPAD'),
+    Pengembangan_Pct: v('alPeng'),
+    Pengurus_Pct: v('alPgrs'),
+    Cadangan_Pct: v('alCad'),
+    Sosial_Pct: v('alSos'),
+    Tanggal_Alokasi: v('alTgl')
+  };
+
+  showToast('Menyimpan...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) {
+        showToast('Alokasi PAD berhasil disimpan!', 'success');
+        closeModal();
+        loadAlokasiPAD();
+      }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .saveAlokasiPAD(data);
+}
+
+// ============================================================
+// LAPORAN LABA RUGI RESMI
+// ============================================================
+function loadLabaRugi() {
+  const selBulan = filterState.labaRugi.bulan;
+
+  google.script.run
+    .withSuccessHandler(r => {
+      const p   = pengaturan;
+      const per = r.periode || {};
+      const periodeTeks = selBulan ? `${BULAN[parseInt(selBulan)]} ${per.tahun}` : `Tahun ${per.tahun || currentTahun}`;
+      const isProfit = (r.labaBersih || 0) >= 0;
+
+      const docHtml = `
+  <div class="doc" id="docLabaRugi">
+    <div class="doc-kop">
+      <div style="font-size:10pt;font-weight:700;text-transform:uppercase">Badan Usaha Milik Desa (BUMDes)</div>
+      <div class="nama-bumdes">${p.nama_bumdes || 'BUMDes Maju Bersama'}</div>
+      <div class="nama-desa">Desa ${p.nama_desa || 'Sejahtera'}, ${p.kecamatan || 'Kec.'}, ${p.kabupaten || 'Kab.'}</div>
+      <div class="alamat">Sistem Pelaporan Keuangan Standar Akuntansi BUMDes</div>
+    </div>
+    <div class="doc-judul">Laporan Laba Rugi</div>
+    <div class="doc-periode">Periode: ${periodeTeks}</div>
+
+    <table>
+      <thead>
+        <tr><th style="width:6%">No.</th><th>Uraian Akun</th><th style="width:22%">Jumlah (Rp)</th><th style="width:24%">Total (Rp)</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="center" rowspan="${Math.max(1, Object.keys(r.pendapatan.detail).length) + 2}">I</td>
+          <td><strong>PENDAPATAN USAHA</strong></td><td></td><td></td>
+        </tr>
+        ${Object.entries(r.pendapatan.detail).map(([k, val], i) => `
+          <tr><td class="indent">${String.fromCharCode(97 + i)}. ${k}</td>
+              <td class="right">${fRpFull(val)}</td><td></td></tr>`).join('')}
+        <tr class="subtotal-row"><td><strong>Total Pendapatan Usaha</strong></td>
+            <td></td><td class="right"><strong>${fRpFull(r.pendapatan.total)}</strong></td></tr>
+
+        <tr>
+          <td class="center" rowspan="${Math.max(1, Object.keys(r.biayaVariabel.detail).length) + 2}">II</td>
+          <td><strong>BIAYA VARIABEL / HPP</strong></td><td></td><td></td>
+        </tr>
+        ${Object.entries(r.biayaVariabel.detail).map(([k, val], i) => `
+          <tr><td class="indent">${String.fromCharCode(97 + i)}. ${k}</td>
+              <td class="right">(${fRpFull(val)})</td><td></td></tr>`).join('')}
+        <tr class="subtotal-row"><td><strong>Total Biaya Variabel</strong></td>
+            <td></td><td class="right"><strong>(${fRpFull(r.biayaVariabel.total)})</strong></td></tr>
+
+        <tr class="total-row"><td class="center">III</td>
+            <td><strong>LABA KOTOR (I - II)</strong></td>
+            <td></td><td class="right"><strong>${fRpFull(r.labaKotor)}</strong></td></tr>
+
+        <tr>
+          <td class="center" rowspan="${Math.max(1, Object.keys(r.biayaLainnya.detail).length) + 2}">IV</td>
+          <td><strong>BIAYA OPERASIONAL &amp; UMUM</strong></td><td></td><td></td>
+        </tr>
+        ${Object.entries(r.biayaLainnya.detail).map(([k, val], i) => `
+          <tr><td class="indent">${String.fromCharCode(97 + i)}. ${k}</td>
+              <td class="right">(${fRpFull(val)})</td><td></td></tr>`).join('')}
+        <tr class="subtotal-row"><td><strong>Total Biaya Operasional</strong></td>
+            <td></td><td class="right"><strong>(${fRpFull(r.biayaLainnya.total)})</strong></td></tr>
+      </tbody>
+      <tfoot>
+        <tr class="${isProfit ? 'laba-row' : 'rugi-row'}">
+          <td class="center"><strong>V</strong></td>
+          <td><strong>${isProfit ? 'LABA BERSIH (SURPLUS)' : 'RUGI BERSIH (DEFISIT)'}</strong></td>
+          <td></td>
+          <td class="right"><strong>${fRpFull(r.labaBersih)}</strong></td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div class="ttd-wrap">
+      <div class="ttd-box">
+        <div class="ttd-label">Mengetahui,</div>
+        <div class="ttd-jabatan">Kepala Desa ${p.nama_desa || ''}</div>
+        <div class="ttd-name">${p.kepala_desa || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Diperiksa,</div>
+        <div class="ttd-jabatan">Direktur BUMDes</div>
+        <div class="ttd-name">${p.direktur || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Dibuat oleh,</div>
+        <div class="ttd-jabatan">Bendahara BUMDes</div>
+        <div class="ttd-name">${p.bendahara || '.........................'}</div>
+      </div>
+    </div>
+  </div>`;
+
+      setContent(`
+        <div class="section-header">
+          <div>
+            <div class="section-title">Laporan Laba Rugi</div>
+            <div class="section-sub">Periode: ${periodeTeks}</div>
+          </div>
+          <div class="page-actions">
+            <div class="filter-bar" style="margin-bottom:0">
+              <select id="lrBulan" onchange="onFilterLabaRugiChange()">
+                <option value="" ${selBulan === '' ? 'selected' : ''}>Semua Bulan (Tahunan)</option>
+                ${Array.from({length:12}, (_, i) => `<option value="${i+1}" ${String(selBulan) === String(i+1) ? 'selected' : ''}>${BULAN[i+1]}</option>`).join('')}
+              </select>
+            </div>
+            <button class="btn btn-print" onclick="cetakDok('docLabaRugi')"><i class="fas fa-print"></i> Cetak Dokumen</button>
+          </div>
+        </div>
+        <div class="doc-preview card">${docHtml}</div>`);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat laba rugi: ${err.message}</p></div>`);
+    })
+    .getLaporanLabaRugi(currentTahun, selBulan ? parseInt(selBulan) : null);
+}
+
+function onFilterLabaRugiChange() {
+  filterState.labaRugi.bulan = v('lrBulan');
+  loadLabaRugi();
+}
+
+// ============================================================
+// LAPORAN ARUS KAS
+// ============================================================
+function loadArusKas() {
+  google.script.run
+    .withSuccessHandler(r => {
+      const p = pengaturan;
+      const trendHtml = (r.trendBulanan || []).map((t, i) => `
+        <tr>
+          <td class="center">${i + 1}</td>
+          <td>${BULAN[t.bulan]}</td>
+          <td class="right">${fRpFull(t.masuk)}</td>
+          <td class="right">(${fRpFull(t.keluar)})</td>
+          <td class="right ${t.neto >= 0 ? 'text-green' : 'text-red'}"><strong>${fRpFull(t.neto)}</strong></td>
+        </tr>`).join('');
+
+      const docHtml = `
+  <div class="doc" id="docArusKas">
+    <div class="doc-kop">
+      <div style="font-size:10pt;font-weight:700;text-transform:uppercase">Badan Usaha Milik Desa (BUMDes)</div>
+      <div class="nama-bumdes">${p.nama_bumdes || 'BUMDes'}</div>
+      <div class="nama-desa">Desa ${p.nama_desa || ''}, ${p.kecamatan || ''}, ${p.kabupaten || ''}</div>
+    </div>
+    <div class="doc-judul">Laporan Arus Kas</div>
+    <div class="doc-periode">Tahun Anggaran ${r.periode.tahun}</div>
+
+    <table>
+      <thead><tr><th style="width:6%">No.</th><th>Aktivitas Arus Kas</th><th style="width:24%">Jumlah (Rp)</th></tr></thead>
+      <tbody>
+        <tr><td class="center">I</td><td><strong>ARUS KAS DARI AKTIVITAS OPERASIONAL</strong></td><td></td></tr>
+        <tr><td></td><td class="indent">Penerimaan Kas dari Pendapatan Usaha</td><td class="right">${fRpFull(Math.max(0, r.arusOperasi))}</td></tr>
+        <tr><td></td><td class="indent">Pengeluaran Kas untuk Biaya &amp; Beban Operasi</td><td class="right">(${fRpFull(Math.abs(Math.min(0, r.arusOperasi)))})</td></tr>
+        <tr class="subtotal-row"><td></td><td><strong>Arus Kas Bersih dari Aktivitas Operasi</strong></td>
+          <td class="right"><strong>${fRpFull(r.arusOperasi)}</strong></td></tr>
+
+        <tr><td class="center">II</td><td><strong>ARUS KAS DARI AKTIVITAS INVESTASI</strong></td><td></td></tr>
+        <tr><td></td><td class="indent">Penerimaan Penyertaan Modal</td><td class="right">${fRpFull(r.arusInvestasi)}</td></tr>
+        <tr class="subtotal-row"><td></td><td><strong>Arus Kas Bersih dari Aktivitas Investasi</strong></td>
+          <td class="right"><strong>${fRpFull(r.arusInvestasi)}</strong></td></tr>
+
+        <tr><td class="center">III</td><td><strong>ARUS KAS DARI AKTIVITAS PENDANAAN</strong></td><td></td></tr>
+        <tr><td></td><td class="indent">Penyaluran Hasil Usaha ke PAD Desa &amp; Sosial</td><td class="right">(${fRpFull(Math.abs(r.arusFinansiasi))})</td></tr>
+        <tr class="subtotal-row"><td></td><td><strong>Arus Kas Bersih dari Aktivitas Pendanaan</strong></td>
+          <td class="right"><strong>${fRpFull(r.arusFinansiasi)}</strong></td></tr>
+      </tbody>
+      <tfoot>
+        <tr class="total-row"><td class="center"><strong>IV</strong></td>
+          <td><strong>KENAIKAN / (PENURUNAN) KAS BERSIH</strong></td>
+          <td class="right"><strong>${fRpFull(r.totalArus)}</strong></td></tr>
+        <tr><td></td><td>Saldo Kas Awal Periode</td><td class="right">${fRpFull(r.saldoAwal)}</td></tr>
+        <tr class="laba-row"><td></td><td><strong>Saldo Kas Akhir Periode</strong></td>
+          <td class="right"><strong>${fRpFull(r.saldoAkhir)}</strong></td></tr>
+      </tfoot>
+    </table>
+
+    <br>
+    <div style="font-weight:700;font-size:11pt;margin-bottom:8px">Rekapitulasi Arus Kas Bulanan:</div>
+    <table>
+      <thead>
+        <tr><th style="width:6%">No.</th><th>Bulan</th><th>Arus Masuk (Rp)</th><th>Arus Keluar (Rp)</th><th>Neto Kas (Rp)</th></tr>
+      </thead>
+      <tbody>${trendHtml}</tbody>
+    </table>
+
+    <div class="ttd-wrap">
+      <div class="ttd-box">
+        <div class="ttd-label">Mengetahui,</div>
+        <div class="ttd-jabatan">Kepala Desa ${p.nama_desa || ''}</div>
+        <div class="ttd-name">${p.kepala_desa || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Diperiksa,</div>
+        <div class="ttd-jabatan">Direktur BUMDes</div>
+        <div class="ttd-name">${p.direktur || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Dibuat oleh,</div>
+        <div class="ttd-jabatan">Bendahara BUMDes</div>
+        <div class="ttd-name">${p.bendahara || '.........................'}</div>
+      </div>
+    </div>
+  </div>`;
+
+      setContent(`
+        <div class="section-header">
+          <div>
+            <div class="section-title">Laporan Arus Kas</div>
+            <div class="section-sub">Tahun Anggaran ${r.periode.tahun}</div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-print" onclick="cetakDok('docArusKas')"><i class="fas fa-print"></i> Cetak</button>
+          </div>
+        </div>
+        <div class="doc-preview card">${docHtml}</div>`);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat arus kas: ${err.message}</p></div>`);
+    })
+    .getLaporanArusKas(currentTahun, null);
+}
+
+// ============================================================
+// NERACA KEUANGAN
+// ============================================================
+function loadNeraca() {
+  google.script.run
+    .withSuccessHandler(r => {
+      const p = pengaturan;
+      const docHtml = `
+  <div class="doc" id="docNeraca">
+    <div class="doc-kop">
+      <div style="font-size:10pt;font-weight:700;text-transform:uppercase">Badan Usaha Milik Desa (BUMDes)</div>
+      <div class="nama-bumdes">${p.nama_bumdes || 'BUMDes'}</div>
+      <div class="nama-desa">Desa ${p.nama_desa || ''}, ${p.kecamatan || ''}, ${p.kabupaten || ''}</div>
+    </div>
+    <div class="doc-judul">Neraca Keuangan</div>
+    <div class="doc-periode">Per 31 Desember ${currentTahun}</div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:50%">AKTIVA (ASET)</th><th style="width:20%">Jumlah (Rp)</th>
+          <th style="width:50%">PASIVA (KEWAJIBAN &amp; EKUITAS)</th><th style="width:20%">Jumlah (Rp)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>I. AKTIVA LANCAR</strong></td><td></td>
+          <td><strong>I. KEWAJIBAN (HUTANG)</strong></td><td></td>
+        </tr>
+        <tr>
+          <td class="indent">Kas &amp; Bank</td><td class="right">${fRpFull(r.aktiva.lancar.kas)}</td>
+          <td class="indent">Hutang Jangka Pendek</td><td class="right">${fRpFull(r.pasiva.kewajiban.jangkaPendek)}</td>
+        </tr>
+        <tr>
+          <td class="indent">Piutang Usaha</td><td class="right">${fRpFull(r.aktiva.lancar.piutang)}</td>
+          <td class="indent">Hutang Jangka Panjang</td><td class="right">${fRpFull(r.pasiva.kewajiban.jangkaPanjang)}</td>
+        </tr>
+        <tr>
+          <td class="indent">Persediaan Barang</td><td class="right">${fRpFull(r.aktiva.lancar.persediaan)}</td>
+          <td class="subtotal-row"><strong>Total Kewajiban</strong></td>
+          <td class="right subtotal-row"><strong>${fRpFull(r.pasiva.kewajiban.total)}</strong></td>
+        </tr>
+        <tr class="subtotal-row">
+          <td><strong>Total Aktiva Lancar</strong></td><td class="right"><strong>${fRpFull(r.aktiva.lancar.total)}</strong></td>
+          <td></td><td></td>
+        </tr>
+        <tr>
+          <td><strong>II. AKTIVA TETAP</strong></td><td></td>
+          <td><strong>II. MODAL / EKUITAS</strong></td><td></td>
+        </tr>
+        <tr>
+          <td class="indent">Peralatan, Mesin &amp; Gedung</td><td class="right">${fRpFull(r.aktiva.tetap.peralatan)}</td>
+          <td class="indent">Penyertaan Modal Desa</td><td class="right">${fRpFull(r.pasiva.modal.penyertaan)}</td>
+        </tr>
+        <tr>
+          <td class="indent">Akumulasi Penyusutan</td><td class="right">(${fRpFull(r.aktiva.tetap.akumulasi)})</td>
+          <td class="indent">Laba Ditahan / Berjalan</td><td class="right">${fRpFull(r.pasiva.modal.labaDitahan)}</td>
+        </tr>
+        <tr class="subtotal-row">
+          <td><strong>Total Aktiva Tetap</strong></td><td class="right"><strong>${fRpFull(r.aktiva.tetap.total)}</strong></td>
+          <td><strong>Total Ekuitas / Modal</strong></td><td class="right"><strong>${fRpFull(r.pasiva.modal.total)}</strong></td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr class="total-row">
+          <td><strong>TOTAL AKTIVA</strong></td><td class="right"><strong>${fRpFull(r.aktiva.totalAktiva)}</strong></td>
+          <td><strong>TOTAL PASIVA</strong></td><td class="right"><strong>${fRpFull(r.pasiva.totalPasiva)}</strong></td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div class="ttd-wrap">
+      <div class="ttd-box">
+        <div class="ttd-label">Mengetahui,</div>
+        <div class="ttd-jabatan">Kepala Desa ${p.nama_desa || ''}</div>
+        <div class="ttd-name">${p.kepala_desa || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Diperiksa,</div>
+        <div class="ttd-jabatan">Direktur BUMDes</div>
+        <div class="ttd-name">${p.direktur || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Dibuat oleh,</div>
+        <div class="ttd-jabatan">Bendahara BUMDes</div>
+        <div class="ttd-name">${p.bendahara || '.........................'}</div>
+      </div>
+    </div>
+  </div>`;
+
+      setContent(`
+        <div class="section-header">
+          <div>
+            <div class="section-title">Neraca Keuangan</div>
+            <div class="section-sub">Per 31 Desember ${currentTahun}</div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-print" onclick="cetakDok('docNeraca')"><i class="fas fa-print"></i> Cetak</button>
+          </div>
+        </div>
+        <div class="doc-preview card">${docHtml}</div>`);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat neraca: ${err.message}</p></div>`);
+    })
+    .getLaporanNeraca(currentTahun);
+}
+
+// ============================================================
+// BUKU KAS UMUM
+// ============================================================
+function loadKas() {
+  google.script.run
+    .withSuccessHandler(rows => {
+      rows = rows || [];
+      const p = pengaturan;
+      const saldo = rows.length > 0 ? (parseFloat(rows[rows.length - 1].Saldo) || 0) : 0;
+
+      const rowsHtml = rows.map((r, i) => `<tr>
+        <td class="center">${i + 1}</td>
+        <td>${fDate(r.Tanggal)}</td>
+        <td><span class="badge ${r.Jenis === 'Pendapatan' ? 'badge-success' : r.Jenis === 'Modal' ? 'badge-info' : 'badge-danger'}">${r.Jenis || '-'}</span></td>
+        <td>${r.Keterangan || '-'}</td>
+        <td class="right text-green">${parseNumber(r.Masuk) > 0 ? fRpFull(r.Masuk) : '-'}</td>
+        <td class="right text-red">${parseNumber(r.Keluar) > 0 ? fRpFull(r.Keluar) : '-'}</td>
+        <td class="right"><strong>${fRpFull(r.Saldo)}</strong></td>
+      </tr>`).join('');
+
+      const docHtml = `
+  <div class="doc" id="docKas">
+    <div class="doc-kop">
+      <div style="font-size:10pt;font-weight:700;text-transform:uppercase">Badan Usaha Milik Desa (BUMDes)</div>
+      <div class="nama-bumdes">${p.nama_bumdes || 'BUMDes'}</div>
+      <div class="nama-desa">Desa ${p.nama_desa || ''}, ${p.kecamatan || ''}, ${p.kabupaten || ''}</div>
+    </div>
+    <div class="doc-judul">Buku Kas Umum (BKU)</div>
+    <div class="doc-periode">Tahun Anggaran ${currentTahun}</div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:5%">No.</th>
+          <th style="width:13%">Tanggal</th>
+          <th style="width:13%">Jenis</th>
+          <th>Uraian / Keterangan</th>
+          <th style="width:16%">Debit (+) Rp</th>
+          <th style="width:16%">Kredit (-) Rp</th>
+          <th style="width:17%">Saldo Rp</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml || '<tr><td colspan="7" class="center">Belum ada catatan transaksi di buku kas</td></tr>'}</tbody>
+      <tfoot>
+        <tr class="total-row">
+          <td colspan="6" class="right"><strong>SALDO KAS SAAT INI</strong></td>
+          <td class="right"><strong>${fRpFull(saldo)}</strong></td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <div class="ttd-wrap">
+      <div class="ttd-box">
+        <div class="ttd-label">Mengetahui,</div>
+        <div class="ttd-jabatan">Direktur BUMDes</div>
+        <div class="ttd-name">${p.direktur || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Diperiksa,</div>
+        <div class="ttd-jabatan">Sekretaris BUMDes</div>
+        <div class="ttd-name">${p.sekretaris || '.........................'}</div>
+      </div>
+      <div class="ttd-box">
+        <div class="ttd-label">Dibuat oleh,</div>
+        <div class="ttd-jabatan">Bendahara BUMDes</div>
+        <div class="ttd-name">${p.bendahara || '.........................'}</div>
+      </div>
+    </div>
+  </div>`;
+
+      setContent(`
+        <div class="section-header">
+          <div>
+            <div class="section-title">Buku Kas Umum (BKU)</div>
+            <div class="section-sub">Saldo Kas Terakhir: <strong class="text-green">${fRp(saldo)}</strong></div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-print" onclick="cetakDok('docKas')"><i class="fas fa-print"></i> Cetak</button>
+          </div>
+        </div>
+        <div class="doc-preview card">${docHtml}</div>`);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat kas: ${err.message}</p></div>`);
+    })
+    .getKas({ tahun: currentTahun });
+}
+
+// ============================================================
+// UNIT USAHA
+// ============================================================
+function loadUnitUsaha() {
+  google.script.run
+    .withSuccessHandler(rows => {
+      unitList = rows || [];
+      let h = `
+        <div class="section-header">
+          <div>
+            <div class="section-title">Unit Usaha BUMDes</div>
+            <div class="section-sub">Daftar Divisi dan Bidang Usaha yang Dikelola</div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormUnit()"><i class="fas fa-plus"></i> Tambah Unit Usaha</button>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">`;
+
+      if (!unitList.length) {
+        h += `<div style="grid-column:1/-1"><div class="empty-state"><i class="fas fa-store"></i><p>Belum ada unit usaha terdaftar</p></div></div>`;
+      }
+
+      unitList.forEach(r => {
+        h += `<div class="card" style="margin-bottom:0">
+          <div class="card-body">
+            <div class="d-flex justify-between align-center mb-4">
+              <strong style="font-size:15px;color:var(--primary-dark)">${r.Nama_Unit}</strong>
+              <span class="badge ${r.Status === 'Aktif' ? 'badge-success' : 'badge-neutral'}">${r.Status}</span>
+            </div>
+            <div style="font-size:12.5px;color:var(--text-muted);display:grid;gap:6px">
+              <div><i class="fas fa-briefcase" style="width:16px;color:var(--primary)"></i> Jenis: <strong>${r.Jenis_Usaha || '-'}</strong></div>
+              <div><i class="fas fa-user-tie" style="width:16px;color:var(--primary)"></i> PJ: <strong>${r.Penanggung_Jawab || '-'}</strong></div>
+              <div><i class="fas fa-coins" style="width:16px;color:var(--accent-dark)"></i> Modal: <strong>${fRp(r.Modal_Awal)}</strong></div>
+              <div><i class="fas fa-calendar" style="width:16px;color:var(--text-light)"></i> Berdiri: ${fDate(r.Tanggal_Berdiri)}</div>
+              ${r.Keterangan ? `<div style="margin-top:4px;font-style:italic">"${r.Keterangan}"</div>` : ''}
+            </div>
+            <div class="d-flex gap-8 mt-4">
+              <button class="btn btn-sm btn-outline" onclick='openFormUnit(${JSON.stringify(r)})'><i class="fas fa-edit"></i> Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="hapusUnit('${r.ID}')"><i class="fas fa-trash"></i> Hapus</button>
+            </div>
+          </div>
+        </div>`;
+      });
+
+      h += `</div>`;
+      setContent(h);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat unit usaha: ${err.message}</p></div>`);
+    })
+    .getUnitUsaha();
+}
+
+function openFormUnit(d) {
+  d = d || {};
+  document.getElementById('modalTitle').textContent = d.ID ? 'Edit Unit Usaha' : 'Tambah Unit Usaha';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group full"><label class="form-label req">Nama Unit Usaha</label>
+        <input type="text" class="form-control" id="uNama" value="${d.Nama_Unit || ''}" placeholder="misal: Unit Air Bersih" required></div>
+      <div class="form-group"><label class="form-label">Jenis Usaha</label>
+        <select class="form-control" id="uJenis">
+          ${['Perdagangan', 'Jasa Layanan', 'Pertanian & Peternakan', 'Pariwisata & Hiburan', 'Pengelolaan Sampah & Air', 'Industri Kreatif / Rumahan', 'Simpan Pinjam', 'Lainnya']
+            .map(j => `<option value="${j}" ${d.Jenis_Usaha === j ? 'selected' : ''}>${j}</option>`).join('')}
+        </select></div>
+      <div class="form-group"><label class="form-label">Penanggung Jawab</label>
+        <input type="text" class="form-control" id="uPJ" value="${d.Penanggung_Jawab || ''}" placeholder="Nama penanggung jawab"></div>
+      <div class="form-group"><label class="form-label">Modal Awal Unit (Rp)</label>
+        <input type="number" class="form-control" id="uModal" value="${d.Modal_Awal || 0}" placeholder="0"></div>
+      <div class="form-group"><label class="form-label">Tanggal Berdiri</label>
+        <input type="date" class="form-control" id="uTgl" value="${d.Tanggal_Berdiri ? fDateInput(d.Tanggal_Berdiri) : today()}"></div>
+      <div class="form-group"><label class="form-label">Status Unit</label>
+        <select class="form-control" id="uStatus">
+          <option value="Aktif" ${d.Status === 'Aktif' || !d.ID ? 'selected' : ''}>Aktif</option>
+          <option value="Tidak Aktif" ${d.Status === 'Tidak Aktif' ? 'selected' : ''}>Tidak Aktif</option>
+        </select></div>
+      <div class="form-group full"><label class="form-label">Keterangan</label>
+        <textarea class="form-control" id="uKet">${d.Keterangan || ''}</textarea></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="saveUnit('${d.ID || ''}')"><i class="fas fa-save"></i> Simpan</button>
+    </div>`;
+  openModal();
+}
+
+function saveUnit(id) {
+  const data = {
+    ID: id,
+    Nama_Unit: v('uNama'),
+    Jenis_Usaha: v('uJenis'),
+    Penanggung_Jawab: v('uPJ'),
+    Modal_Awal: v('uModal'),
+    Tanggal_Berdiri: v('uTgl'),
+    Status: v('uStatus'),
+    Keterangan: v('uKet')
+  };
+  if (!data.Nama_Unit) { showToast('Nama unit usaha wajib diisi!', 'error'); return; }
+  showToast('Menyimpan...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Unit usaha disimpan!', 'success'); closeModal(); loadUnitUsaha(); }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .saveUnitUsaha(data);
+}
+
+function hapusUnit(id) {
+  if (!confirm('Hapus unit usaha ini?')) return;
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Unit usaha dihapus', 'success'); loadUnitUsaha(); }
+    })
+    .deleteUnitUsaha(id);
+}
+
+// ============================================================
+// MANAJEMEN PENGGUNA
+// ============================================================
+function loadPenggunaPage() {
+  google.script.run
+    .withSuccessHandler(rows => {
+      rows = rows || [];
+      let h = `
+        <div class="section-header">
+          <div>
+            <div class="section-title">Manajemen Akun Pengguna</div>
+            <div class="section-sub">Kelola Hak Akses Pengurus BUMDes</div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-primary" onclick="openFormUser()"><i class="fas fa-user-plus"></i> Tambah Pengguna</button>
+          </div>
+        </div>
+        <div class="card"><div class="table-wrap"><table>
+          <thead><tr><th>Username</th><th>Nama Lengkap</th><th>Hak Akses / Role</th><th>Status</th><th>Aksi</th></tr></thead>
+          <tbody>`;
+
+      if (!rows.length) {
+        h += `<tr><td colspan="5"><div class="empty-state"><i class="fas fa-users"></i><p>Belum ada data pengguna</p></div></td></tr>`;
+      }
+
+      rows.forEach(u => {
+        h += `<tr>
+          <td><strong>${u.Username}</strong></td>
+          <td>${u.Nama_Lengkap || '-'}</td>
+          <td><span class="badge ${u.Role === 'Admin' ? 'badge-danger' : u.Role === 'Bendahara' ? 'badge-info' : 'badge-neutral'}">${u.Role || 'Staff'}</span></td>
+          <td><span class="badge ${u.Status === 'Aktif' ? 'badge-success' : 'badge-danger'}">${u.Status || 'Aktif'}</span></td>
+          <td>
+            <button class="btn btn-sm btn-ghost btn-icon" title="Edit" onclick='openFormUser(${JSON.stringify(u)})'><i class="fas fa-edit"></i></button>
+            ${u.Username !== 'admin' ? `<button class="btn btn-sm btn-danger btn-icon" title="Hapus" onclick="hapusUser('${u.ID}')"><i class="fas fa-trash"></i></button>` : ''}
+          </td></tr>`;
+      });
+
+      h += `</tbody></table></div></div>`;
+      setContent(h);
+    })
+    .withFailureHandler(err => {
+      setContent(`<div class="empty-state text-red"><p>Gagal memuat pengguna: ${err.message}</p></div>`);
+    })
+    .getPengguna();
+}
+
+function openFormUser(d) {
+  d = d || {};
+  document.getElementById('modalTitle').textContent = d.ID ? 'Edit Pengguna' : 'Tambah Pengguna Baru';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid">
+      <div class="form-group"><label class="form-label req">Username</label>
+        <input type="text" class="form-control" id="usrName" value="${d.Username || ''}" ${d.ID ? 'readonly' : ''} placeholder="username" required></div>
+      <div class="form-group"><label class="form-label ${d.ID ? '' : 'req'}">Password ${d.ID ? '(Kosongkan jika tidak diubah)' : ''}</label>
+        <input type="password" class="form-control" id="usrPass" placeholder="Minimal 6 karakter"></div>
+      <div class="form-group full"><label class="form-label req">Nama Lengkap</label>
+        <input type="text" class="form-control" id="usrFull" value="${d.Nama_Lengkap || ''}" placeholder="Nama lengkap pengurus" required></div>
+      <div class="form-group"><label class="form-label req">Hak Akses / Role</label>
+        <select class="form-control" id="usrRole">
+          <option value="Admin" ${d.Role === 'Admin' ? 'selected' : ''}>Admin / Direktur (Akses Penuh)</option>
+          <option value="Bendahara" ${d.Role === 'Bendahara' ? 'selected' : ''}>Bendahara (Transaksi & Laporan)</option>
+          <option value="Pengawas" ${d.Role === 'Pengawas' ? 'selected' : ''}>Pengawas / Kepala Desa (Lihat Saja)</option>
+        </select></div>
+      <div class="form-group"><label class="form-label">Status Akun</label>
+        <select class="form-control" id="usrStatus">
+          <option value="Aktif" ${d.Status === 'Aktif' || !d.ID ? 'selected' : ''}>Aktif</option>
+          <option value="Non-aktif" ${d.Status === 'Non-aktif' ? 'selected' : ''}>Non-aktif</option>
+        </select></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="saveUser('${d.ID || ''}')"><i class="fas fa-save"></i> Simpan</button>
+    </div>`;
+  openModal();
+}
+
+function saveUser(id) {
+  const data = {
+    ID: id,
+    Username: v('usrName'),
+    Password: v('usrPass'),
+    Nama_Lengkap: v('usrFull'),
+    Role: v('usrRole'),
+    Status: v('usrStatus')
+  };
+  if (!data.Username || (!id && !data.Password)) {
+    showToast('Username dan password wajib diisi!', 'error');
+    return;
+  }
+  showToast('Menyimpan...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) {
+        showToast(r.message || 'Pengguna berhasil disimpan!', 'success');
+        closeModal();
+        loadPenggunaPage();
+      } else {
+        showToast(r.message || 'Gagal menyimpan', 'error');
+      }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .savePengguna(data);
+}
+
+function hapusUser(id) {
+  if (!confirm('Hapus akun pengguna ini?')) return;
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Pengguna dihapus', 'success'); loadPenggunaPage(); }
+    })
+    .deletePengguna(id);
+}
+
+function openUbahPasswordModal() {
+  document.getElementById('modalTitle').textContent = 'Ubah Kata Sandi';
+  document.getElementById('modalBody').innerHTML = `
+    <div class="form-grid" style="grid-template-columns:1fr">
+      <div class="form-group"><label class="form-label req">Password Saat Ini</label>
+        <input type="password" class="form-control" id="passOld" placeholder="Masukkan password lama" required></div>
+      <div class="form-group"><label class="form-label req">Password Baru</label>
+        <input type="password" class="form-control" id="passNew" placeholder="Minimal 6 karakter" required></div>
+      <div class="form-group"><label class="form-label req">Ulangi Password Baru</label>
+        <input type="password" class="form-control" id="passConfirm" placeholder="Ketik ulang password baru" required></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:20px">
+      <button class="btn btn-ghost" onclick="closeModal()">Batal</button>
+      <button class="btn btn-primary" onclick="submitUbahPassword()"><i class="fas fa-key"></i> Simpan Password</button>
+    </div>`;
+  openModal();
+}
+
+function submitUbahPassword() {
+  const oldP = v('passOld');
+  const newP = v('passNew');
+  const cnfP = v('passConfirm');
+
+  if (!oldP || !newP) { showToast('Harap isi semua kolom!', 'error'); return; }
+  if (newP !== cnfP)  { showToast('Konfirmasi password tidak cocok!', 'error'); return; }
+  if (newP.length < 6){ showToast('Password minimal 6 karakter!', 'error'); return; }
+
+  showToast('Memperbarui password...', 'info');
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) {
+        showToast('Password berhasil diubah!', 'success');
+        closeModal();
+      } else {
+        showToast(r.message || 'Gagal mengubah password', 'error');
+      }
+    })
+    .withFailureHandler(err => showToast('Error: ' + err.message, 'error'))
+    .ubahPassword(currentUser.username, oldP, newP);
+}
+
+// ============================================================
+// PENGATURAN SISTEM
+// ============================================================
+function loadPengaturanPage() {
+  google.script.run
+    .withSuccessHandler(d => {
+      pengaturan = d || {};
+      setContent(`
+        <div class="section-header">
+          <div>
+            <div class="section-title">Pengaturan Sistem &amp; Dokumen</div>
+            <div class="section-sub">Atur Identitas BUMDes, Pejabat Tanda Tangan, dan Persentase PAD</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px">
+          <div class="card">
+            <div class="card-header"><div class="card-title"><i class="fas fa-landmark"></i> Identitas Lembaga BUMDes</div></div>
+            <div class="card-body">
+              <div class="form-grid" style="grid-template-columns:1fr">
+                <div class="form-group"><label class="form-label req">Nama BUMDes</label>
+                  <input type="text" class="form-control" id="sNamaBumdes" value="${d.nama_bumdes || ''}"></div>
+                <div class="form-group"><label class="form-label req">Nama Desa</label>
+                  <input type="text" class="form-control" id="sNamaDesa" value="${d.nama_desa || ''}"></div>
+                <div class="form-group"><label class="form-label">Kecamatan</label>
+                  <input type="text" class="form-control" id="sKec" value="${d.kecamatan || ''}"></div>
+                <div class="form-group"><label class="form-label">Kabupaten / Kota</label>
+                  <input type="text" class="form-control" id="sKab" value="${d.kabupaten || ''}"></div>
+                <div class="form-group"><label class="form-label">Tahun Buku Aktif</label>
+                  <input type="number" class="form-control" id="sTahun" value="${d.tahun_aktif || currentTahun}"></div>
+              </div>
+              <button class="btn btn-primary mt-4" onclick="savePengInfo()"><i class="fas fa-save"></i> Simpan Lembaga</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><div class="card-title"><i class="fas fa-pen-nib"></i> Pejabat Penandatangan Laporan</div></div>
+            <div class="card-body">
+              <div class="form-grid" style="grid-template-columns:1fr">
+                <div class="form-group"><label class="form-label">Kepala Desa / Penasihat</label>
+                  <input type="text" class="form-control" id="sKaDes" value="${d.kepala_desa || ''}"></div>
+                <div class="form-group"><label class="form-label">Direktur BUMDes</label>
+                  <input type="text" class="form-control" id="sDirektur" value="${d.direktur || ''}"></div>
+                <div class="form-group"><label class="form-label">Sekretaris BUMDes</label>
+                  <input type="text" class="form-control" id="sSekretaris" value="${d.sekretaris || ''}"></div>
+                <div class="form-group"><label class="form-label">Bendahara BUMDes</label>
+                  <input type="text" class="form-control" id="sBendahara" value="${d.bendahara || ''}"></div>
+              </div>
+              <button class="btn btn-primary mt-4" onclick="savePengPejabat()"><i class="fas fa-save"></i> Simpan Pejabat</button>
+            </div>
+          </div>
+
+          <div class="card" style="grid-column:1/-1">
+            <div class="card-header"><div class="card-title"><i class="fas fa-percent"></i> Standar Persentase Pembagian Hasil Usaha (PAD)</div></div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="form-group"><label class="form-label">PAD Desa (%)</label>
+                  <input type="number" class="form-control" id="sPAD" value="${d.pad_desa_pct || 40}" oninput="cekTotalPAD()"></div>
+                <div class="form-group"><label class="form-label">Pengembangan Usaha (%)</label>
+                  <input type="number" class="form-control" id="sPeng" value="${d.pengembangan_pct || 30}" oninput="cekTotalPAD()"></div>
+                <div class="form-group"><label class="form-label">Insentif Pengurus (%)</label>
+                  <input type="number" class="form-control" id="sPengurus" value="${d.pengurus_pct || 20}" oninput="cekTotalPAD()"></div>
+                <div class="form-group"><label class="form-label">Dana Cadangan (%)</label>
+                  <input type="number" class="form-control" id="sCad" value="${d.cadangan_pct || 5}" oninput="cekTotalPAD()"></div>
+                <div class="form-group"><label class="form-label">Dana Sosial (%)</label>
+                  <input type="number" class="form-control" id="sSos" value="${d.sosial_pct || 5}" oninput="cekTotalPAD()"></div>
+                <div class="form-group"><label class="form-label">Total Persentase (%)</label>
+                  <input type="number" class="form-control" id="sTotal" value="100" readonly></div>
+              </div>
+              <button class="btn btn-primary mt-4" onclick="savePengAlokasi()"><i class="fas fa-save"></i> Simpan Alokasi</button>
+            </div>
+          </div>
+        </div>`);
+    })
+    .getPengaturan();
+}
+
+function cekTotalPAD() {
+  const t = ['sPAD', 'sPeng', 'sPengurus', 'sCad', 'sSos'].reduce((s, id) => s + (parseFloat(document.getElementById(id).value) || 0), 0);
+  const el = document.getElementById('sTotal');
+  el.value = t;
+  el.style.color = (t === 100) ? 'var(--success)' : 'var(--danger)';
+}
+
+function savePengInfo() {
+  const data = {
+    nama_bumdes: v('sNamaBumdes'),
+    nama_desa: v('sNamaDesa'),
+    kecamatan: v('sKec'),
+    kabupaten: v('sKab'),
+    tahun_aktif: v('sTahun')
+  };
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Data lembaga berhasil disimpan!', 'success'); loadPengaturanGlobal(); }
+    })
+    .savePengaturan(data);
+}
+
+function savePengPejabat() {
+  const data = {
+    kepala_desa: v('sKaDes'),
+    direktur: v('sDirektur'),
+    sekretaris: v('sSekretaris'),
+    bendahara: v('sBendahara')
+  };
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Data pejabat berhasil disimpan!', 'success'); pengaturan = {...pengaturan, ...data}; }
+    })
+    .savePengaturan(data);
+}
+
+function savePengAlokasi() {
+  const t = ['sPAD', 'sPeng', 'sPengurus', 'sCad', 'sSos'].reduce((s, id) => s + (parseFloat(document.getElementById(id).value) || 0), 0);
+  if (t !== 100) { showToast('Total persentase harus 100%!', 'error'); return; }
+  const data = {
+    pad_desa_pct: v('sPAD'),
+    pengembangan_pct: v('sPeng'),
+    pengurus_pct: v('sPengurus'),
+    cadangan_pct: v('sCad'),
+    sosial_pct: v('sSos')
+  };
+  google.script.run
+    .withSuccessHandler(r => {
+      if (r.success) { showToast('Persentase PAD disimpan!', 'success'); pengaturan = {...pengaturan, ...data}; }
+    })
+    .savePengaturan(data);
+}
+
+// ============================================================
+// CETAK DOKUMEN RESMI
+// ============================================================
+function cetakDok(docId) {
+  const el = document.getElementById(docId);
+  if (!el) { showToast('Dokumen tidak ditemukan', 'error'); return; }
+  const win = window.open('', '_blank', 'width=950,height=750');
+  win.document.write(`<!DOCTYPE html><html lang="id"><head>
+    <meta charset="UTF-8"><title>Cetak Dokumen Resmi BUMDes</title>
+    <style>
+      body{font-family:'Times New Roman',serif;margin:0;padding:12mm 15mm;font-size:11pt;color:#000}
+      table{width:100%;border-collapse:collapse;font-size:11pt}
+      table th,table td{border:1px solid #000;padding:4px 8px;vertical-align:top}
+      table th{background:#e2e8f0;font-weight:700;text-align:center}
+      .subtotal-row td,.subtotal-row{font-weight:700;background:#f1f5f9}
+      .total-row td,.total-row{font-weight:700;background:#cbd5e1;font-size:12pt}
+      .laba-row td,.laba-row{font-weight:700;background:#dcfce7;font-size:12pt}
+      .rugi-row td,.rugi-row{font-weight:700;background:#fee2e2;font-size:12pt}
+      .indent{padding-left:18px!important}
+      .right{text-align:right}.center{text-align:center}
+      .doc-kop{text-align:center;border-bottom:3px double #000;padding-bottom:8px;margin-bottom:12px}
+      .nama-bumdes{font-size:15pt;font-weight:700;text-transform:uppercase;letter-spacing:1px}
+      .nama-desa{font-size:10.5pt;font-weight:700}
+      .doc-judul{text-align:center;margin:12px 0 8px;font-size:13pt;font-weight:700;text-transform:uppercase;text-decoration:underline}
+      .doc-periode{text-align:center;font-size:10.5pt;margin-bottom:14px}
+      .ttd-wrap{display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-top:28px;text-align:center;font-size:9.5pt}
+      .ttd-box{display:flex;flex-direction:column;align-items:center}
+      .ttd-label{font-weight:700;margin-bottom:3px}
+      .ttd-jabatan{font-size:9pt;margin-bottom:55px}
+      .ttd-name{border-top:1px solid #000;padding-top:3px;font-weight:700;width:100%;text-align:center}
+      @media print{body{padding:8mm 10mm}}
+    </style></head><body>${el.outerHTML}
+    <script>window.onload=()=>{window.print();}<\/script>
+  </body></html>`);
+  win.document.close();
+}
+
+// ============================================================
+// MODAL & TOAST HELPERS
+// ============================================================
+function openModal()  { document.getElementById('modalOverlay').classList.add('open'); document.getElementById('modalBox').classList.add('open'); }
+function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); document.getElementById('modalBox').classList.remove('open'); }
+
+function showToast(msg, type) {
+  const icons = { success: 'fa-check-circle', error: 'fa-circle-exclamation', info: 'fa-circle-info' };
+  const colors = { success: 'var(--success)', error: 'var(--danger)', info: 'var(--info)' };
+  const t = document.createElement('div');
+  t.className = `toast ${type || 'info'}`;
+  t.innerHTML = `<i class="fas ${icons[type] || icons.info}" style="color:${colors[type] || colors.info}"></i><span>${msg}</span>`;
+  document.getElementById('toastContainer').appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function v(id) { const el = document.getElementById(id); return el ? el.value : ''; }
+
+function parseNumber(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  let s = String(val).trim();
+  if (!s) return 0;
+  let isNegative = false;
+  if (s.indexOf('(') === 0 && s.indexOf(')') === s.length - 1) {
+    isNegative = true;
+    s = s.slice(1, -1).trim();
+  } else if (s.indexOf('-') === 0) {
+    isNegative = true;
+    s = s.slice(1).trim();
+  }
+  s = s.replace(/^(Rp|IDR)\.?\s*/i, '').trim();
+  if (s.indexOf('.') >= 0 && s.indexOf(',') >= 0) {
+    if (s.lastIndexOf('.') < s.lastIndexOf(',')) {
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else {
+      s = s.replace(/,/g, '');
+    }
+  } else if (s.indexOf('.') >= 0) {
+    const parts = s.split('.');
+    if (parts.length > 2) {
+      s = s.replace(/\./g, '');
+    } else if (parts.length === 2 && parts[1].length === 3) {
+      s = parts[0] + parts[1];
+    }
+  } else if (s.indexOf(',') >= 0) {
+    const parts = s.split(',');
+    if (parts.length > 2) {
+      s = s.replace(/,/g, '');
+    } else if (parts.length === 2) {
+      if (parts[1].length === 3) {
+        s = parts[0] + parts[1];
+      } else {
+        s = parts[0] + '.' + parts[1];
+      }
+    }
+  }
+  s = s.replace(/[^0-9.-]/g, '');
+  const n = parseFloat(s);
+  if (isNaN(n)) return 0;
+  return isNegative ? -n : n;
+}
+
+const INDO_MONTHS = {
+  januari: 1, jan: 1,
+  februari: 2, pebruari: 2, feb: 2,
+  maret: 3, mar: 3,
+  april: 4, apr: 4,
+  mei: 5, may: 5,
+  juni: 6, jun: 6,
+  juli: 7, jul: 7,
+  agustus: 8, ags: 8, agu: 8, aug: 8,
+  september: 9, sep: 9, sept: 9,
+  oktober: 10, okt: 10, oct: 10,
+  november: 11, nopember: 11, nov: 11,
+  desember: 12, des: 12, dec: 12
+};
+
+function parseDateInfo(val) {
+  if (val === null || val === undefined || val === '') return null;
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    const y = val.getFullYear();
+    const m = val.getMonth() + 1;
+    const d = val.getDate();
+    return { year: y, month: m, day: d, formatted: y + '-' + String(m < 10 ? '0' + m : m) + '-' + String(d < 10 ? '0' + d : d) };
+  }
+  if (typeof val === 'number' && val > 20000 && val < 80000) {
+    const dt = new Date(Math.round((val - 25569) * 86400 * 1000));
+    if (!isNaN(dt.getTime())) {
+      const y = dt.getUTCFullYear();
+      const m = dt.getUTCMonth() + 1;
+      const d = dt.getUTCDate();
+      return { year: y, month: m, day: d, formatted: y + '-' + String(m < 10 ? '0' + m : m) + '-' + String(d < 10 ? '0' + d : d) };
+    }
+  }
+  const s = String(val).trim();
+  if (!s) return null;
+  let match = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (match) {
+    const y = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    const d = parseInt(match[3], 10);
+    return { year: y, month: m, day: d, formatted: y + '-' + String(m < 10 ? '0' + m : m) + '-' + String(d < 10 ? '0' + d : d) };
+  }
+  match = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  if (match) {
+    const d = parseInt(match[1], 10);
+    const m = parseInt(match[2], 10);
+    const y = parseInt(match[3], 10);
+    return { year: y, month: m, day: d, formatted: y + '-' + String(m < 10 ? '0' + m : m) + '-' + String(d < 10 ? '0' + d : d) };
+  }
+  match = s.match(/^(\d{1,2})\s*[-/ ]\s*([a-zA-Z]+)\s*[-/ ]\s*(\d{4})/);
+  if (match) {
+    const d = parseInt(match[1], 10);
+    const m = INDO_MONTHS[match[2].toLowerCase()];
+    const y = parseInt(match[3], 10);
+    if (m) return { year: y, month: m, day: d, formatted: y + '-' + String(m < 10 ? '0' + m : m) + '-' + String(d < 10 ? '0' + d : d) };
+  }
+  match = s.match(/^([a-zA-Z]+)\s*[-/ ]\s*(\d{4})/);
+  if (match) {
+    const m = INDO_MONTHS[match[1].toLowerCase()];
+    const y = parseInt(match[2], 10);
+    if (m) return { year: y, month: m, day: 1, formatted: y + '-' + String(m < 10 ? '0' + m : m) + '-01' };
+  }
+  match = s.match(/^(\d{4})$/);
+  if (match) {
+    const y = parseInt(match[1], 10);
+    if (y > 2000 && y < 2100) return { year: y, month: 1, day: 1, formatted: y + '-01-01' };
+  }
+  if (/\d+/.test(s) && (s.indexOf('-') >= 0 || s.indexOf('/') >= 0 || s.indexOf('.') >= 0)) {
+    const dt = new Date(s);
+    if (!isNaN(dt.getTime())) {
+      const y = dt.getFullYear();
+      const m = dt.getMonth() + 1;
+      const d = dt.getDate();
+      return { year: y, month: m, day: d, formatted: y + '-' + String(m < 10 ? '0' + m : m) + '-' + String(d < 10 ? '0' + d : d) };
+    }
+  }
+  return null;
+}
+
+function fRp(n) {
+  const num = parseNumber(n);
+  if (Math.abs(num) >= 1e9) return 'Rp ' + (num / 1e9).toFixed(1) + ' M';
+  if (Math.abs(num) >= 1e6) return 'Rp ' + (num / 1e6).toFixed(1) + ' jt';
+  return 'Rp ' + num.toLocaleString('id-ID');
+}
+
+function fRpFull(n) {
+  const num = parseNumber(n);
+  return num.toLocaleString('id-ID');
+}
+
+function fK(n) {
+  const num = parseNumber(n);
+  if (Math.abs(num) >= 1e9) return (num / 1e9).toFixed(1) + 'M';
+  if (Math.abs(num) >= 1e6) return (num / 1e6).toFixed(1) + 'jt';
+  if (Math.abs(num) >= 1e3) return (num / 1e3).toFixed(0) + 'rb';
+  return num;
+}
+
+function fDate(d) {
+  if (!d) return '-';
+  try {
+    const s = String(d).trim();
+    const p = parseDateInfo(s);
+    if (p) {
+      const dt = new Date(p.year, p.month - 1, p.day);
+      return dt.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    return s;
+  } catch (e) {
+    return String(d);
+  }
+}
+
+function fDateInput(d) {
+  if (!d) return '';
+  try {
+    const s = String(d).trim();
+    let m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (m) {
+      return `${m[1]}-${String(m[2]).padStart(2,'0')}-${String(m[3]).padStart(2,'0')}`;
+    }
+    m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if (m) {
+      return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+    }
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return '';
+    return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+  } catch (e) {
+    return '';
+  }
+}
+
+function today() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+}
+
+const BULAN = ['', 'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+const BULAN_S = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+</script>
